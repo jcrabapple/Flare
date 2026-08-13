@@ -243,6 +243,8 @@ import dev.dimension.flare.settings_mxga_never_refreshed
 import dev.dimension.flare.settings_mxga_refresh_title
 import dev.dimension.flare.settings_mxga_refreshing
 import dev.dimension.flare.settings_nostr_relays_manage
+import dev.dimension.flare.settings_plugins_subtitle
+import dev.dimension.flare.settings_plugins_title
 import dev.dimension.flare.settings_post_action_fixed_width
 import dev.dimension.flare.settings_post_action_fixed_width_description
 import dev.dimension.flare.settings_privacy_policy
@@ -358,6 +360,7 @@ import kotlin.time.Instant
 @OptIn(ExperimentalFluentApi::class)
 @Composable
 internal fun SettingsScreen(
+    toPlugins: () -> Unit,
     toLogin: () -> Unit,
     toRelogin: (ReloginTarget) -> Unit,
     toDraftBox: () -> Unit,
@@ -476,6 +479,8 @@ internal fun SettingsScreen(
                                         },
                                         toLogin = toLogin,
                                         toRelogin = toRelogin,
+                                        unavailableAccount = account.account.takeUnless { it.platformAvailable },
+                                        toPlugins = toPlugins,
                                         trailingContent = { user ->
                                             Row(
                                                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
@@ -633,6 +638,13 @@ internal fun SettingsScreen(
                         }
                     }
                 },
+            )
+
+            Header(stringResource(Res.string.settings_plugins_title))
+            CardExpanderItem(
+                heading = { Text(stringResource(Res.string.settings_plugins_title)) },
+                caption = { Text(stringResource(Res.string.settings_plugins_subtitle)) },
+                onClick = toPlugins,
             )
 
             Header(stringResource(Res.string.settings_appearance_title))
