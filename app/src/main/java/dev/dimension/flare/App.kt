@@ -15,10 +15,10 @@ import coil3.video.VideoFrameDecoder
 import dev.dimension.flare.common.AnimatedPngDecoder
 import dev.dimension.flare.common.AnimatedWebPDecoder
 import dev.dimension.flare.common.CorruptImageRetryInterceptor
-import dev.dimension.flare.ui.component.proxyImageFetcherFactory
 import dev.dimension.flare.di.AndroidKoinApplication
 import dev.dimension.flare.di.koinGet
 import dev.dimension.flare.feature.plugin.PluginSubsystemV1
+import dev.dimension.flare.ui.component.proxyImageFetcherFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import org.koin.android.ext.koin.androidContext
