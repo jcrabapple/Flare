@@ -6,6 +6,10 @@ and QuickJS runtime. GitHub HTTP responses and archive contents were not mocked.
 
 ## Public fixture
 
+The owner deleted this fixture after the acceptance run. The following IDs and
+commits record that completed run; to repeat it, recreate the same text-only
+plugin with both version tags and supply its new repository URL.
+
 - Repository: <https://github.com/Tlaster/flare-plugin-github-e2e-20261028>
 - Repository ID: `1436012088`
 - `v1.0.0`: `c535ad0a82603cf4efef299b8d5710e16ca87f06`
