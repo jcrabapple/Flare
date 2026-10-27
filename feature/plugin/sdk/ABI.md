@@ -55,6 +55,9 @@ the global proxy policy, without account credentials, and respect rate-limit ret
 headers. Private repositories,
 branch tracking, client-side builds, and automatic installation are unsupported.
 
+See [real GitHub validation](GITHUB_INSTALLATION_VALIDATION.md) for the public
+fixture, verified restart boundaries, and opt-in live test commands.
+
 ## Registration
 
 The script calls `definePlugin` once. It registers named services; it does not
