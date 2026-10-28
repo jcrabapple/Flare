@@ -50,6 +50,10 @@ import dev.dimension.flare.data.platform.CommonTimelineSpecs
 import dev.dimension.flare.data.platform.MastodonCredential
 import dev.dimension.flare.data.platform.MastodonPlatformSpec
 import dev.dimension.flare.data.platform.toTimelineCandidate
+import dev.dimension.flare.data.push.PushCategory
+import dev.dimension.flare.data.push.PushNotificationItem
+import dev.dimension.flare.data.push.PushServerKey
+import dev.dimension.flare.data.push.PushSubscriptionDataSource
 import dev.dimension.flare.data.repository.tryRun
 import dev.dimension.flare.di.koinInject
 import dev.dimension.flare.model.AccountType
@@ -95,12 +99,22 @@ internal open class MastodonDataSource(
     PinnableTimelineTabDataSource,
     TimelineTabConfigurationDataSource,
     RelationDataSource,
-    PostEventHandler.Handler {
+    PostEventHandler.Handler,
+    PushSubscriptionDataSource {
     private val imageCompressor: ImageCompressor by koinInject()
     private val service by lazy {
         MastodonService(
-            proxy = ProxyRef.forAccount(accountKey),            baseUrl = "https://$instance/",
+            proxy = ProxyRef.forAccount(accountKey),
+            baseUrl = "https://$instance/",
             accessTokenFlow = credentialFlow.map { it.accessToken },
+        )
+    }
+
+    private val push by lazy {
+        MastodonPush(
+            accountKey = accountKey,
+            resources = service,
+            instance = service,
         )
     }
 
@@ -164,6 +178,36 @@ internal open class MastodonDataSource(
             handler = this,
         )
     }
+
+    override suspend fun pushServerKey(): PushServerKey = push.pushServerKey()
+
+    override suspend fun subscribePush(
+        endpoint: String,
+        p256dh: String,
+        auth: String,
+        categories: Set<PushCategory>,
+    ) = push.subscribePush(
+        endpoint = endpoint,
+        p256dh = p256dh,
+        auth = auth,
+        categories = categories,
+    )
+
+    override suspend fun updatePushCategories(categories: Set<PushCategory>) = push.updatePushCategories(categories)
+
+    override suspend fun unsubscribePush(endpoint: String) = push.unsubscribePush(endpoint)
+
+    override suspend fun latestNotificationId(): String? = service.notification(limit = 1).firstOrNull()?.id
+
+    override suspend fun fetchNotificationsSince(
+        sinceId: String?,
+        limit: Int,
+    ): List<PushNotificationItem> =
+        service
+            .notification(
+                since_id = sinceId,
+                limit = limit,
+            ).mapNotNull { it.toPushNotificationItem(accountKey) }
 
     override suspend fun handle(
         event: PostEvent,

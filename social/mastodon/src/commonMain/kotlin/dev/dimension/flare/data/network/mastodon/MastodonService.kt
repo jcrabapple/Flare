@@ -10,6 +10,7 @@ import dev.dimension.flare.data.network.mastodon.api.InstanceResources
 import dev.dimension.flare.data.network.mastodon.api.ListsResources
 import dev.dimension.flare.data.network.mastodon.api.LookupResources
 import dev.dimension.flare.data.network.mastodon.api.MastodonResources
+import dev.dimension.flare.data.network.mastodon.api.PushResources
 import dev.dimension.flare.data.network.mastodon.api.SearchResources
 import dev.dimension.flare.data.network.mastodon.api.StatusResources
 import dev.dimension.flare.data.network.mastodon.api.TimelineResources
@@ -20,6 +21,7 @@ import dev.dimension.flare.data.network.mastodon.api.createInstanceResources
 import dev.dimension.flare.data.network.mastodon.api.createListsResources
 import dev.dimension.flare.data.network.mastodon.api.createLookupResources
 import dev.dimension.flare.data.network.mastodon.api.createMastodonResources
+import dev.dimension.flare.data.network.mastodon.api.createPushResources
 import dev.dimension.flare.data.network.mastodon.api.createSearchResources
 import dev.dimension.flare.data.network.mastodon.api.createStatusResources
 import dev.dimension.flare.data.network.mastodon.api.createTimelineResources
@@ -100,7 +102,8 @@ internal class MastodonService(
     ListsResources by config(baseUrl, accessTokenFlow, proxy).createListsResources(),
     TrendsResources by config(baseUrl, accessTokenFlow, proxy).createTrendsResources(),
     InstanceResources by config(baseUrl, accessTokenFlow, proxy).createInstanceResources(),
-    MastodonResources by config(baseUrl, accessTokenFlow, proxy).createMastodonResources() {
+    MastodonResources by config(baseUrl, accessTokenFlow, proxy).createMastodonResources(),
+    PushResources by config(baseUrl, accessTokenFlow, proxy).createPushResources() {
     suspend fun mediaLimits(): MediaAttachments? =
         withTimeoutOrNull(5_000) {
             suspend fun fetch(v2: Boolean): MediaAttachments? =
