@@ -223,6 +223,8 @@ internal class PushNotificationRepository(
 
     override suspend fun deactivate(accountKey: MicroBlogKey) {
         mutexFor(accountKey).withLock {
+            // Nothing stored means nothing was ever registered: do not create an empty entry.
+            if (settings.data.first().accounts[accountKey.toString()] == null) return@withLock
             var storedEndpoint: String? = null
             updateAccountSettings(accountKey) {
                 storedEndpoint = it.endpoint

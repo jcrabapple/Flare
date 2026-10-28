@@ -136,7 +136,12 @@ internal class PushNotifier(
             }
 
             PushNotificationType.Reaction -> {
-                context.getString(R.string.push_notif_reaction, actor, item.reaction.orEmpty())
+                val reaction = item.reaction?.takeIf { it.isNotBlank() }
+                if (reaction != null) {
+                    context.getString(R.string.push_notif_reaction, actor, reaction)
+                } else {
+                    context.getString(R.string.push_notif_favourite, actor)
+                }
             }
 
             PushNotificationType.Other -> {

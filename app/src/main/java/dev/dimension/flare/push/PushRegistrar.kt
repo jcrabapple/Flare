@@ -2,6 +2,7 @@ package dev.dimension.flare.push
 
 import android.content.Context
 import dev.dimension.flare.data.push.PushNotificationService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import org.koin.core.annotation.Provided
 import org.koin.core.annotation.Single
@@ -24,6 +25,9 @@ internal class PushRegistrar(
         UnifiedPush.saveDistributor(context, packageName)
     }
 
+    /** The saved distributor; if none is saved and exactly one is installed, saves and returns it. */
+    fun ensureDistributor(): String? = currentDistributor() ?: distributors().singleOrNull()?.also { selectDistributor(it) }
+
     /**
      * D9: called on every app start. When push is enabled, (re-)register every account that should
      * be registered and unregister + deactivate the ones that should no longer be; when push is
@@ -36,19 +40,40 @@ internal class PushRegistrar(
             known.forEach { UnifiedPush.unregister(context, it.toString()) }
             return
         }
-        // Without an installed, saved distributor UnifiedPush.register cannot succeed; leave the
+        // UnifiedPush.register needs a saved, installed distributor. With exactly one installed
+        // (the common "just installed ntfy" case) save it automatically; with several, leave the
         // account states alone until the user picks one in the settings screen.
-        if (currentDistributor() == null) return
+        if (ensureDistributor() == null) return
         val toRegister = service.accountsToRegister()
         toRegister.forEach { accountKey ->
-            // null means the server has push off (the service marked the account ServerDisabled);
-            // there is nothing to register for that account.
-            val vapid = service.prepareRegistration(accountKey) ?: return@forEach
-            UnifiedPush.register(context, accountKey.toString(), MESSAGE_FOR_DISTRIBUTOR, vapid)
+            try {
+                // null means the server has push off (the service marked the account
+                // ServerDisabled); there is nothing to register for that account.
+                val vapid = service.prepareRegistration(accountKey) ?: return@forEach
+                UnifiedPush.register(context, accountKey.toString(), MESSAGE_FOR_DISTRIBUTOR, vapid)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // e.g. VapidNotValidException for a malformed server key: fail this account only.
+                service.onRegistrationFailed(accountKey, e.message ?: e::class.simpleName.orEmpty())
+            }
         }
-        (known.toSet() - toRegister.toSet()).forEach { accountKey ->
-            UnifiedPush.unregister(context, accountKey.toString())
-            service.deactivate(accountKey)
+        // Only accounts push could have registered need cleanup; unsupported platforms never were.
+        val supported =
+            service.accounts
+                .first()
+                .filter { it.supported }
+                .map { it.accountKey }
+                .toSet()
+        (supported - toRegister.toSet()).forEach { accountKey ->
+            try {
+                UnifiedPush.unregister(context, accountKey.toString())
+                service.deactivate(accountKey)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 

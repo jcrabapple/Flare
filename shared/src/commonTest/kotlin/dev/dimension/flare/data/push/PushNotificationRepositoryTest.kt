@@ -333,6 +333,18 @@ class PushNotificationRepositoryTest : RobolectricTest() {
         }
 
     @Test
+    fun deactivateWithoutStoredStateWritesNothing() =
+        runTest {
+            insertAccount(accountKey, TEST_PUSH_PLATFORM)
+            val service = createService(this)
+
+            service.deactivate(accountKey)
+
+            assertNull(accountSettings(accountKey))
+            assertTrue(pushDataSource.unsubscribedEndpoints.isEmpty())
+        }
+
+    @Test
     fun deactivateMarksOffAndUnsubscribesWithStoredEndpoint() =
         runTest {
             insertAccount(accountKey, TEST_PUSH_PLATFORM)

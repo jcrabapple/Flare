@@ -166,15 +166,25 @@ class PushFetchWorkerTest {
     @Test
     fun transientErrorRetriesBelowMaxAttempts() {
         val service = FakePushNotificationService { throw IOException("offline") }
-        val result = runBlocking { runWorker(service, runAttemptCount = 2) }
+        // runAttemptCount 1 = the second attempt; one more is still allowed.
+        val result = runBlocking { runWorker(service, runAttemptCount = 1) }
         assertTrue(result is ListenableWorker.Result.Retry)
     }
 
     @Test
     fun transientErrorFailsAtMaxAttempts() {
         val service = FakePushNotificationService { throw IOException("offline") }
-        val result = runBlocking { runWorker(service, runAttemptCount = PushFetchWorker.MAX_RETRIES) }
+        // runAttemptCount 2 = the third and last attempt (D12: max 3 attempts).
+        val result = runBlocking { runWorker(service, runAttemptCount = PushFetchWorker.MAX_ATTEMPTS - 1) }
         assertTrue(result is ListenableWorker.Result.Failure)
+    }
+
+    @Test
+    fun defaultWorkerFactoryCanInstantiateTheWorker() {
+        // Production uses WorkManager's default reflective factory, which needs a
+        // (Context, WorkerParameters) constructor. No custom factory here on purpose.
+        val worker = TestListenableWorkerBuilder<PushFetchWorker>(context).build()
+        assertTrue(worker is PushFetchWorker)
     }
 
     @Test

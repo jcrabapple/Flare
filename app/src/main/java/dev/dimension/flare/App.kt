@@ -20,6 +20,7 @@ import dev.dimension.flare.di.AndroidKoinApplication
 import dev.dimension.flare.push.PushNotifier
 import dev.dimension.flare.push.PushRegistrar
 import dev.dimension.flare.ui.component.proxyImageFetcherFactory
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -32,7 +33,14 @@ import org.unifiedpush.android.connector.UnifiedPush
 class App :
     Application(),
     SingletonImageLoader.Factory {
-    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val appScope =
+        CoroutineScope(
+            SupervisorJob() + Dispatchers.IO +
+                CoroutineExceptionHandler { _, error ->
+                    // Push setup must never crash app start; failures are reflected in account states.
+                    error.printStackTrace()
+                },
+        )
 
     override fun onCreate() {
         super.onCreate()
@@ -49,8 +57,10 @@ class App :
         }
         appScope.launch {
             pushNotificationService.removedAccounts.collect { accountKey ->
-                UnifiedPush.unregister(this@App, accountKey.toString())
-                notifier.cancelAccount(accountKey)
+                runCatching {
+                    UnifiedPush.unregister(this@App, accountKey.toString())
+                    notifier.cancelAccount(accountKey)
+                }.onFailure { it.printStackTrace() }
             }
         }
     }

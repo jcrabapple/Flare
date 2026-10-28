@@ -30,6 +30,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -45,6 +46,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.dimension.flare.R
 import dev.dimension.flare.data.push.PushAccount
 import dev.dimension.flare.data.push.PushAccountState
@@ -118,8 +121,12 @@ internal fun NotificationSettingsScreen(onBack: () -> Unit) {
             onGranted = { permissionDenied = false },
             onDenied = { permissionDenied = true },
         )
-    val distributors = remember { registrar.distributors() }
-    val currentDistributor = remember { registrar.currentDistributor() }
+    // Re-query on every resume: the user may come back from installing ntfy, and selecting a
+    // distributor bumps the key too.
+    var distributorRefresh by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { distributorRefresh++ }
+    val distributors = remember(distributorRefresh) { registrar.distributors() }
+    val currentDistributor = remember(distributorRefresh) { registrar.currentDistributor() }
     val distributorLabels =
         remember(distributors) {
             distributors.associateWith { packageName ->
@@ -137,10 +144,27 @@ internal fun NotificationSettingsScreen(onBack: () -> Unit) {
                 if (!value) {
                     permissionDenied = false
                 }
-                scope.launch { service.setEnabled(value) }
+                scope.launch {
+                    runCatching {
+                        if (value) {
+                            service.setEnabled(true)
+                            // Registers every enabled account; auto-saves a single installed distributor.
+                            registrar.sync()
+                        } else {
+                            // Unregisters from the distributor and removes server subscriptions.
+                            registrar.disableAll()
+                        }
+                    }.onFailure { it.printStackTrace() }
+                    distributorRefresh++
+                }
             },
             onSetAccountEnabled = { accountKey, value ->
-                scope.launch { service.setAccountEnabled(accountKey, value) }
+                scope.launch {
+                    runCatching {
+                        service.setAccountEnabled(accountKey, value)
+                        registrar.sync()
+                    }.onFailure { it.printStackTrace() }
+                }
             },
             onSetCategory = { category, value ->
                 scope.launch {
@@ -149,7 +173,8 @@ internal fun NotificationSettingsScreen(onBack: () -> Unit) {
             },
             onSelectDistributor = { packageName ->
                 registrar.selectDistributor(packageName)
-                scope.launch { registrar.sync() }
+                distributorRefresh++
+                scope.launch { runCatching { registrar.sync() }.onFailure { it.printStackTrace() } }
             },
             onInstallNtfy = {
                 runCatching {
@@ -295,7 +320,7 @@ internal fun NotificationSettingsContent(
                                     state.currentDistributor?.let { state.distributorLabels[it] }
                                 }
                             }
-                        Text(text = label.orEmpty())
+                        Text(text = label ?: stringResource(id = R.string.push_distributor_pick))
                     },
                 )
             }
@@ -420,13 +445,15 @@ private fun stateLabel(account: PushAccount): String {
     if (!account.supported) {
         return stringResource(id = R.string.push_state_unsupported)
     }
+    // The repository always stores a message or exception class; "?" only guards blanks.
+    val errorReason = account.lastError?.takeIf { it.isNotBlank() } ?: "?"
     return when (account.state) {
         PushAccountState.Off -> stringResource(id = R.string.push_state_off)
         PushAccountState.Registering -> stringResource(id = R.string.push_state_registering)
         PushAccountState.Active -> stringResource(id = R.string.push_state_active)
         PushAccountState.ServerDisabled -> stringResource(id = R.string.push_state_server_disabled)
         PushAccountState.ReauthRequired -> stringResource(id = R.string.push_state_reauth)
-        PushAccountState.Error -> stringResource(id = R.string.push_state_error, account.lastError.orEmpty())
+        PushAccountState.Error -> stringResource(id = R.string.push_state_error, errorReason)
         PushAccountState.Unsupported -> stringResource(id = R.string.push_state_unsupported)
     }
 }
