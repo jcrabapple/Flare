@@ -103,6 +103,13 @@
         </activity>
 
         <service
+            android:name=".push.FlarePushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
+            </intent-filter>
+        </service>
+        <service
             android:name=".common.PlaybackService"
             android:foregroundServiceType="mediaPlayback"
             android:exported="true">

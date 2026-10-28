@@ -15,18 +15,43 @@ import coil3.video.VideoFrameDecoder
 import dev.dimension.flare.common.AnimatedPngDecoder
 import dev.dimension.flare.common.AnimatedWebPDecoder
 import dev.dimension.flare.common.CorruptImageRetryInterceptor
-import dev.dimension.flare.ui.component.proxyImageFetcherFactory
+import dev.dimension.flare.data.push.PushNotificationService
 import dev.dimension.flare.di.AndroidKoinApplication
+import dev.dimension.flare.push.PushNotifier
+import dev.dimension.flare.push.PushRegistrar
+import dev.dimension.flare.ui.component.proxyImageFetcherFactory
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.koin.android.ext.koin.androidContext
+import org.koin.core.context.GlobalContext
 import org.koin.plugin.module.dsl.startKoin
+import org.unifiedpush.android.connector.UnifiedPush
 
 class App :
     Application(),
     SingletonImageLoader.Factory {
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override fun onCreate() {
         super.onCreate()
         startKoin<AndroidKoinApplication> {
             androidContext(this@App)
+        }
+        val koin = GlobalContext.get()
+        val notifier = koin.get<PushNotifier>()
+        notifier.ensureChannels()
+        val registrar = koin.get<PushRegistrar>()
+        val pushNotificationService = koin.get<PushNotificationService>()
+        appScope.launch {
+            registrar.sync()
+        }
+        appScope.launch {
+            pushNotificationService.removedAccounts.collect { accountKey ->
+                UnifiedPush.unregister(this@App, accountKey.toString())
+                notifier.cancelAccount(accountKey)
+            }
         }
     }
 

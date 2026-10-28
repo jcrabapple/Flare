@@ -10,5 +10,5 @@ internal class AndroidKoinApplication
 
 @Module
 @Configuration
-@ComponentScan("dev.dimension.flare.common", "dev.dimension.flare.di")
+@ComponentScan("dev.dimension.flare.common", "dev.dimension.flare.di", "dev.dimension.flare.push")
 internal class AndroidKoinModule
