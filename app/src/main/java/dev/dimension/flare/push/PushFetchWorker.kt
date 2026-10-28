@@ -56,7 +56,7 @@ internal class PushFetchWorker constructor(
         val notification =
             NotificationCompat
                 .Builder(applicationContext, PushNotifier.CHANNEL_OTHER)
-                .setSmallIcon(R.mipmap.ic_launcher)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
                 .setContentTitle(applicationContext.getString(R.string.push_fetching))
                 .setOngoing(true)
                 .build()

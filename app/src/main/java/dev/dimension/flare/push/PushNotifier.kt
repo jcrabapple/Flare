@@ -78,14 +78,19 @@ internal class PushNotifier(
         id: Int,
         notification: Notification,
     ) {
-        if (!canPost()) return
-        manager.notify(id, notification)
-    }
-
-    private fun canPost(): Boolean =
-        Build.VERSION.SDK_INT < 33 ||
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        try {
+            manager.notify(id, notification)
+        } catch (error: SecurityException) {
+            // Permission revoked between the check and the post; drop this notification.
+            error.printStackTrace()
+        }
+    }
 
     private fun buildNotification(
         item: PushNotificationItem,
@@ -94,7 +99,7 @@ internal class PushNotifier(
         val builder =
             NotificationCompat
                 .Builder(context, channelFor(item.type.category))
-                .setSmallIcon(R.mipmap.ic_launcher)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
                 .setContentTitle(title(item))
                 .setGroup(group)
                 .setAutoCancel(true)
@@ -114,7 +119,7 @@ internal class PushNotifier(
     ): Notification =
         NotificationCompat
             .Builder(context, channelFor(groupItems.first().type.category))
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(context.getString(R.string.push_notif_summary, groupItems.size))
             .setGroup(group)
             .setGroupSummary(true)
