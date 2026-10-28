@@ -14,7 +14,11 @@ internal class PushRegistrar(
 ) {
     fun distributors(): List<String> = UnifiedPush.getDistributors(context)
 
-    fun currentDistributor(): String? = UnifiedPush.getSavedDistributor(context)?.takeIf { it.isNotBlank() }
+    /** The saved distributor, or null when none is saved or it has been uninstalled since. */
+    fun currentDistributor(): String? =
+        UnifiedPush
+            .getSavedDistributor(context)
+            ?.takeIf { it.isNotBlank() && it in distributors() }
 
     fun selectDistributor(packageName: String) {
         UnifiedPush.saveDistributor(context, packageName)
@@ -32,6 +36,9 @@ internal class PushRegistrar(
             known.forEach { UnifiedPush.unregister(context, it.toString()) }
             return
         }
+        // Without an installed, saved distributor UnifiedPush.register cannot succeed; leave the
+        // account states alone until the user picks one in the settings screen.
+        if (currentDistributor() == null) return
         val toRegister = service.accountsToRegister()
         toRegister.forEach { accountKey ->
             // null means the server has push off (the service marked the account ServerDisabled);
@@ -47,7 +54,11 @@ internal class PushRegistrar(
 
     suspend fun disableAll() {
         val known = service.accounts.first().map { it.accountKey }
-        known.forEach { UnifiedPush.unregister(context, it.toString()) }
+        known.forEach {
+            UnifiedPush.unregister(context, it.toString())
+            // Best-effort server-side unsubscribe; marks the account Off.
+            service.deactivate(it)
+        }
         service.setEnabled(false)
     }
 

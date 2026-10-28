@@ -4,7 +4,6 @@ import dev.dimension.flare.data.push.PushNotificationService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.koin.core.context.GlobalContext
 import org.unifiedpush.android.connector.FailedReason
@@ -13,8 +12,17 @@ import org.unifiedpush.android.connector.UnifiedPush
 import org.unifiedpush.android.connector.data.PushEndpoint
 import org.unifiedpush.android.connector.data.PushMessage
 
+/**
+ * Process-wide scope for push callbacks. A [PushService] instance is short-lived, so work launched
+ * from its callbacks (e.g. the subscribe POST in onNewEndpoint) must not be tied to the service's
+ * lifetime or it is cancelled mid-flight when the service is destroyed.
+ */
+internal object PushScope {
+    val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+}
+
 internal class FlarePushService : PushService() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope get() = PushScope.scope
 
     private val pushNotificationService: PushNotificationService by lazy {
         GlobalContext.get().get<PushNotificationService>()
@@ -80,11 +88,6 @@ internal class FlarePushService : PushService() {
         scope.launch {
             pushNotificationService.onUnregistered(accountKey)
         }
-    }
-
-    override fun onDestroy() {
-        scope.cancel()
-        super.onDestroy()
     }
 
     private fun unregister(instance: String) {
