@@ -157,6 +157,8 @@ dependencies {
     implementation(libs.richtext.ui.material3)
     implementation(libs.richtext.commonmark)
     implementation(libs.androidx.browser)
+    implementation(libs.unifiedpush.connector)
+    implementation(libs.androidx.work.runtime)
     implementation("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")
 
     // START Non-FOSS component
@@ -173,6 +175,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.ktor.client.mock)
     testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.work.testing)
     testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.espresso.core)

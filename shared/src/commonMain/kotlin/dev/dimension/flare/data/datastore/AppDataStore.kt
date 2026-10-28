@@ -10,6 +10,7 @@ import dev.dimension.flare.data.datastore.model.ComposeConfigData
 import dev.dimension.flare.data.datastore.model.FlareConfig
 import dev.dimension.flare.data.datastore.model.HomeTimelinePreferences
 import dev.dimension.flare.data.datastore.model.PlatformOAuthPendingData
+import dev.dimension.flare.data.datastore.model.PushSettings
 import dev.dimension.flare.data.io.FileStorage
 import org.koin.core.annotation.Single
 
@@ -54,6 +55,13 @@ internal class AppDataStore(
         createDataStore(
             name = "platform_oauth_pending_v2.pb",
             serializer = protobufSerializer(PlatformOAuthPendingData()),
+        )
+    }
+
+    val pushSettingsStore: DataStore<PushSettings> by lazy {
+        createDataStore(
+            name = "push_settings.pb",
+            serializer = protobufSerializer(PushSettings()),
         )
     }
 
