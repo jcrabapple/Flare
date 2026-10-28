@@ -1,0 +1,412 @@
+package dev.dimension.flare.data.network.mastodon.api
+
+import de.jensklingenberg.ktorfit.converter.ResponseConverterFactory
+import de.jensklingenberg.ktorfit.ktorfit
+import dev.dimension.flare.common.JSON
+import dev.dimension.flare.data.datasource.mastodon.MastodonPush
+import dev.dimension.flare.data.network.mastodon.api.TimelineResources
+import dev.dimension.flare.data.network.mastodon.api.createTimelineResources
+import dev.dimension.flare.data.network.mastodon.api.model.InstanceData
+import dev.dimension.flare.data.network.mastodon.api.model.InstanceInfoV1
+import dev.dimension.flare.data.network.mastodon.api.model.MastodonPagingConverterFactory
+import dev.dimension.flare.data.network.mastodon.installMastodonErrorMapping
+import dev.dimension.flare.data.network.nullableFallbackJson
+import dev.dimension.flare.data.push.PushCategory
+import dev.dimension.flare.data.push.PushReauthRequiredException
+import dev.dimension.flare.model.MicroBlogKey
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.request.HttpRequestData
+import io.ktor.client.request.forms.FormDataContent
+import io.ktor.http.ContentType
+import io.ktor.http.HttpMethod
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.OutgoingContent
+import io.ktor.http.decodeURLPart
+import io.ktor.http.headersOf
+import kotlinx.coroutines.test.runTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
+
+private val ACCOUNT_KEY = MicroBlogKey(id = "1", host = "mastodon.social")
+
+private val NO_INSTANCE =
+    object : InstanceResources {
+        override suspend fun instance(): InstanceData = throw NotImplementedError()
+
+        override suspend fun instanceV1(): InstanceInfoV1 = throw NotImplementedError()
+    }
+
+/** MastodonPush's timeline API is unused by these tests; a MockEngine-backed stub keeps it inert. */
+private val NO_TIMELINE: TimelineResources by lazy {
+    val client =
+        HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    respond("{}", HttpStatusCode.OK, headersOf("Content-Type", ContentType.Application.Json.toString()))
+                }
+            }
+        }
+    ktorfit {
+        baseUrl("https://example.com/")
+        httpClient(client)
+        converterFactories(ResponseConverterFactory(), MastodonPagingConverterFactory())
+    }.createTimelineResources()
+}
+
+private val SUBSCRIPTION_JSON =
+    """
+    {
+      "id": "01J4Z8K7Q2M3N4P5R6S7T8V9W0",
+      "endpoint": "https://ntfy.sh/flaretopic",
+      "server_key": "BCk-QqERU0q-CfYZjcuB6lnyyOYfJ2AifKqfeGIm7Z-HiTU5T9eTG5GxVA0_OH5mMlI4UkkDTpaZwozy0TzdZ2M=",
+      "alerts": {"mention": true, "follow": false},
+      "policy": "all"
+    }
+    """.trimIndent()
+
+private class CapturedRequest(
+    val method: HttpMethod,
+    val path: String,
+    val fields: Map<String, String>,
+)
+
+private fun mockPushResources(
+    status: HttpStatusCode,
+    body: String,
+    capture: (CapturedRequest) -> Unit,
+): PushResources =
+    mockPushResources(
+        responses = listOf(status to body),
+        capture = capture,
+    )
+
+private fun mockPushResources(
+    responses: List<Pair<HttpStatusCode, String>>,
+    capture: (CapturedRequest) -> Unit,
+    productionErrorMapping: Boolean = false,
+): PushResources {
+    val client =
+        HttpClient(MockEngine) {
+            expectSuccess = true
+            if (productionErrorMapping) {
+                installMastodonErrorMapping()
+            }
+            install(ContentNegotiation) {
+                nullableFallbackJson(JSON)
+            }
+            engine {
+                addHandler { request ->
+                    capture(
+                        CapturedRequest(
+                            method = request.method,
+                            path = request.url.encodedPath,
+                            fields = request.formFields(),
+                        ),
+                    )
+                    val (status, body) = responses.first()
+                    respond(
+                        content = body,
+                        status = status,
+                        headers = headersOf("Content-Type", ContentType.Application.Json.toString()),
+                    )
+                }
+            }
+        }
+    return ktorfit {
+        baseUrl("https://example.com/")
+        httpClient(client)
+        converterFactories(ResponseConverterFactory())
+    }.createPushResources()
+}
+
+private fun HttpRequestData.formFields(): Map<String, String> =
+    when (val content = body) {
+        is FormDataContent -> {
+            content.formData.entries().associate { (name, values) -> name to values.first() }
+        }
+
+        is OutgoingContent.ByteArrayContent -> {
+            content
+                .bytes()
+                .decodeToString()
+                .split('&')
+                .filter { it.isNotEmpty() }
+                .associate {
+                    val (name, value) = it.split('=', limit = 2)
+                    name.decodeURLPart() to value.decodeURLPart()
+                }
+        }
+
+        is OutgoingContent.NoContent -> {
+            emptyMap()
+        }
+
+        else -> {
+            error("Unexpected request body: ${content::class.simpleName}")
+        }
+    }
+
+class PushResourcesTest {
+    @Test
+    fun subscribePostSendsExactFormFieldsForMentionAndReblogCategories() =
+        runTest {
+            lateinit var captured: CapturedRequest
+            val resources =
+                mockPushResources(
+                    status = HttpStatusCode.OK,
+                    body = SUBSCRIPTION_JSON,
+                    capture = { captured = it },
+                )
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
+
+            push.subscribePush(
+                endpoint = "https://ntfy.example/topic",
+                p256dh = "P256DH_KEY",
+                auth = "AUTH_KEY",
+                categories = setOf(PushCategory.Mention, PushCategory.Reblog),
+            )
+
+            assertEquals(HttpMethod.Post, captured.method)
+            assertEquals("/api/v1/push/subscription", captured.path)
+            assertEquals(
+                mapOf(
+                    "subscription[endpoint]" to "https://ntfy.example/topic",
+                    "subscription[keys][p256dh]" to "P256DH_KEY",
+                    "subscription[keys][auth]" to "AUTH_KEY",
+                    "subscription[standard]" to "true",
+                    "data[policy]" to "all",
+                    "data[alerts][mention]" to "true",
+                    "data[alerts][status]" to "false",
+                    "data[alerts][reblog]" to "true",
+                    "data[alerts][follow]" to "false",
+                    "data[alerts][follow_request]" to "false",
+                    "data[alerts][favourite]" to "false",
+                    "data[alerts][poll]" to "false",
+                    "data[alerts][update]" to "false",
+                    "data[alerts][quote]" to "true",
+                ),
+                captured.fields,
+            )
+        }
+
+    @Test
+    fun updatePushCategoriesPutsOnlyDataFields() =
+        runTest {
+            lateinit var captured: CapturedRequest
+            val resources =
+                mockPushResources(
+                    status = HttpStatusCode.OK,
+                    body = SUBSCRIPTION_JSON,
+                    capture = { captured = it },
+                )
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
+
+            push.updatePushCategories(setOf(PushCategory.Follow, PushCategory.Poll))
+
+            assertEquals(HttpMethod.Put, captured.method)
+            assertEquals("/api/v1/push/subscription", captured.path)
+            assertTrue(captured.fields.keys.none { it.startsWith("subscription") })
+            assertEquals(
+                mapOf(
+                    "data[policy]" to "all",
+                    "data[alerts][mention]" to "false",
+                    "data[alerts][status]" to "false",
+                    "data[alerts][reblog]" to "false",
+                    "data[alerts][follow]" to "true",
+                    "data[alerts][follow_request]" to "false",
+                    "data[alerts][favourite]" to "false",
+                    "data[alerts][poll]" to "true",
+                    "data[alerts][update]" to "false",
+                    "data[alerts][quote]" to "false",
+                ),
+                captured.fields,
+            )
+        }
+
+    @Test
+    fun getSubscriptionParsesGoToSocialStringUlid() =
+        runTest {
+            val resources =
+                mockPushResources(
+                    status = HttpStatusCode.OK,
+                    body = SUBSCRIPTION_JSON,
+                    capture = { },
+                )
+
+            val subscription = resources.pushSubscription()
+
+            assertEquals("01J4Z8K7Q2M3N4P5R6S7T8V9W0", subscription.id)
+            assertEquals("https://ntfy.sh/flaretopic", subscription.endpoint)
+            assertEquals(
+                "BCk-QqERU0q-CfYZjcuB6lnyyOYfJ2AifKqfeGIm7Z-HiTU5T9eTG5GxVA0_OH5mMlI4UkkDTpaZwozy0TzdZ2M=",
+                subscription.serverKey,
+            )
+            assertEquals(mapOf("mention" to true, "follow" to false), subscription.alerts)
+        }
+
+    @Test
+    fun getSubscriptionNumericIdParsesToLenientString() =
+        runTest {
+            // Real Mastodon returns a numeric "id": 1. The shared JSON is lenient, so the number
+            // coerces to the string "1" without throwing — the NullableFallback sanitizer in
+            // NullableFallbackJsonContentConverter never engages here (it only runs on decode
+            // failure). Pinning the actual outcome: the id survives as "1", it is not null.
+            val resources =
+                mockPushResources(
+                    status = HttpStatusCode.OK,
+                    body =
+                        """
+                        {
+                          "id": 1,
+                          "endpoint": "https://ntfy.sh/flaretopic",
+                          "server_key": "BCk",
+                          "alerts": {},
+                          "policy": "all"
+                        }
+                        """.trimIndent(),
+                    capture = { },
+                )
+
+            assertEquals("1", resources.pushSubscription().id)
+        }
+
+    @Test
+    fun subscribeMapsUnauthorizedToPushReauthRequiredException() =
+        runTest {
+            val resources =
+                mockPushResources(
+                    status = HttpStatusCode.Unauthorized,
+                    body = "unauthorized",
+                    capture = { },
+                )
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
+
+            assertFailsWith<PushReauthRequiredException> {
+                push.subscribePush(
+                    endpoint = "https://ntfy.example/topic",
+                    p256dh = "P256DH_KEY",
+                    auth = "AUTH_KEY",
+                    categories = setOf(PushCategory.Mention),
+                )
+            }
+        }
+
+    @Test
+    fun subscribeMapsForbiddenToPushReauthRequiredException() =
+        runTest {
+            val resources =
+                mockPushResources(
+                    status = HttpStatusCode.Forbidden,
+                    body = "forbidden",
+                    capture = { },
+                )
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
+
+            assertFailsWith<PushReauthRequiredException> {
+                push.subscribePush(
+                    endpoint = "https://ntfy.example/topic",
+                    p256dh = "P256DH_KEY",
+                    auth = "AUTH_KEY",
+                    categories = setOf(PushCategory.Mention),
+                )
+            }
+        }
+
+    @Test
+    fun subscribePropagatesNonReauthStatuses() =
+        runTest {
+            val resources =
+                mockPushResources(
+                    status = HttpStatusCode.UnprocessableEntity,
+                    body = "unprocessable",
+                    capture = { },
+                )
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
+
+            assertFailsWith<Exception> {
+                push.subscribePush(
+                    endpoint = "https://ntfy.example/topic",
+                    p256dh = "P256DH_KEY",
+                    auth = "AUTH_KEY",
+                    categories = setOf(PushCategory.Mention),
+                )
+            }.let { assertTrue(it !is PushReauthRequiredException) }
+        }
+
+    @Test
+    fun unsubscribePushSwallows404() =
+        runTest {
+            val resources =
+                mockPushResources(
+                    status = HttpStatusCode.NotFound,
+                    body = "not found",
+                    capture = { },
+                )
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
+
+            push.unsubscribePush("https://ntfy.example/topic")
+        }
+
+    // Real servers answer with JSON error bodies, which MastodonService's validator rethrows as
+    // MastodonException; these use the production validator instead of raw ResponseException.
+    @Test
+    fun subscribeMapsForbiddenJsonErrorBodyToPushReauthRequiredException() =
+        runTest {
+            val resources =
+                mockPushResources(
+                    responses = listOf(HttpStatusCode.Forbidden to """{"error":"This action is outside the authorized scopes"}"""),
+                    capture = { },
+                    productionErrorMapping = true,
+                )
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
+
+            assertFailsWith<PushReauthRequiredException> {
+                push.subscribePush(
+                    endpoint = "https://ntfy.example/topic",
+                    p256dh = "P256DH_KEY",
+                    auth = "AUTH_KEY",
+                    categories = setOf(PushCategory.Mention),
+                )
+            }
+        }
+
+    @Test
+    fun subscribePropagatesJsonErrorBodyWithNonReauthStatus() =
+        runTest {
+            val resources =
+                mockPushResources(
+                    responses = listOf(HttpStatusCode.UnprocessableEntity to """{"error":"Validation failed: Endpoint is invalid"}"""),
+                    capture = { },
+                    productionErrorMapping = true,
+                )
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
+
+            assertFailsWith<Exception> {
+                push.subscribePush(
+                    endpoint = "https://ntfy.example/topic",
+                    p256dh = "P256DH_KEY",
+                    auth = "AUTH_KEY",
+                    categories = setOf(PushCategory.Mention),
+                )
+            }.let { assertTrue(it !is PushReauthRequiredException) }
+        }
+
+    @Test
+    fun unsubscribePushSwallowsJsonErrorBody404() =
+        runTest {
+            val resources =
+                mockPushResources(
+                    responses = listOf(HttpStatusCode.NotFound to """{"error":"Record not found"}"""),
+                    capture = { },
+                    productionErrorMapping = true,
+                )
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
+
+            push.unsubscribePush("https://ntfy.example/topic")
+        }
+}

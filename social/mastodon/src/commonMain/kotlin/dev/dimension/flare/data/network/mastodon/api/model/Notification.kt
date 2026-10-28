@@ -42,4 +42,10 @@ internal enum class NotificationTypes(
 
     @SerialName("update")
     Update("update"),
+
+    @SerialName("quote")
+    Quote("quote"),
+
+    @SerialName("quoted_update")
+    QuotedUpdate("quoted_update"),
 }
