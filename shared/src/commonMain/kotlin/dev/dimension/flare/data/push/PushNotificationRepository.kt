@@ -167,16 +167,14 @@ internal class PushNotificationRepository(
             }
             return
         }
-        // D6: baseline on the first successful subscribe so enabling push never floods old
-        // notifications. A re-subscribe (idempotent re-POST) must not overwrite the baseline.
-        val currentLastSeenId =
-            settings
-                .data
-                .first()
-                .accounts[accountKey.toString()]
-                ?.lastSeenId
+        // D6: baseline whenever this is a fresh subscription (no stored endpoint: first subscribe, or
+        // re-activation after deactivate/onUnregistered) so enabling push never floods notifications
+        // that piled up while it was off. A re-subscribe for an endpoint refresh keeps lastSeenId so
+        // nothing that arrived during the refresh is skipped.
+        val current = settings.data.first().accounts[accountKey.toString()]
+        val freshSubscription = current?.endpoint == null || current.lastSeenId == null
         val baseline =
-            if (currentLastSeenId == null) {
+            if (freshSubscription) {
                 try {
                     dataSource.latestNotificationId()
                 } catch (error: CancellationException) {
@@ -193,7 +191,7 @@ internal class PushNotificationRepository(
                 state = Active,
                 endpoint = endpoint,
                 lastError = null,
-                lastSeenId = it.lastSeenId ?: baseline,
+                lastSeenId = if (freshSubscription) baseline ?: it.lastSeenId else it.lastSeenId,
             )
         }
     }

@@ -47,7 +47,9 @@ private fun mockPush(
 ): MisskeyPush {
     val client =
         HttpClient(MockEngine) {
-            expectSuccess = true
+            // MisskeyService does not set expectSuccess; its validator alone turns error bodies
+            // into exceptions, so the production-mapping variant must not add ResponseException.
+            expectSuccess = !productionErrorMapping
             if (productionErrorMapping) {
                 installMisskeyErrorMapping(ACCOUNT_KEY)
             }

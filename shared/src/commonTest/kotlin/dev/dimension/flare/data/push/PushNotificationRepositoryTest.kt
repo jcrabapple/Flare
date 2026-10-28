@@ -346,6 +346,38 @@ class PushNotificationRepositoryTest : RobolectricTest() {
         }
 
     @Test
+    fun onNewEndpointRebaselinesWhenReactivatedAfterDeactivate() =
+        runTest {
+            insertAccount(accountKey, TEST_PUSH_PLATFORM)
+            pushDataSource.latestId = "n100"
+            val service = createService(this)
+            service.onNewEndpoint(accountKey, ENDPOINT, "p256dh-key", "auth-key")
+            service.deactivate(accountKey)
+
+            // Notifications piled up while push was off; re-enabling must not post them.
+            pushDataSource.latestId = "n500"
+            service.onNewEndpoint(accountKey, ENDPOINT, "p256dh-key", "auth-key")
+
+            assertEquals("n500", accountSettings(accountKey)?.lastSeenId)
+            assertEquals(PushAccountState.Active, accountSettings(accountKey)?.state)
+        }
+
+    @Test
+    fun onNewEndpointRebaselinesAfterDistributorUnregistered() =
+        runTest {
+            insertAccount(accountKey, TEST_PUSH_PLATFORM)
+            pushDataSource.latestId = "n100"
+            val service = createService(this)
+            service.onNewEndpoint(accountKey, ENDPOINT, "p256dh-key", "auth-key")
+            service.onUnregistered(accountKey)
+
+            pushDataSource.latestId = "n200"
+            service.onNewEndpoint(accountKey, ENDPOINT, "p256dh-key", "auth-key")
+
+            assertEquals("n200", accountSettings(accountKey)?.lastSeenId)
+        }
+
+    @Test
     fun onRegistrationFailedMarksErrorAndOnUnregisteredMarksOff() =
         runTest {
             insertAccount(accountKey, TEST_PUSH_PLATFORM)
