@@ -1,6 +1,7 @@
 package dev.dimension.flare.data.datasource.mastodon
 
 import com.fleeksoft.ksoup.Ksoup
+import dev.dimension.flare.data.network.mastodon.MastodonException
 import dev.dimension.flare.data.network.mastodon.api.InstanceResources
 import dev.dimension.flare.data.network.mastodon.api.PushResources
 import dev.dimension.flare.data.network.mastodon.api.model.Notification
@@ -197,6 +198,12 @@ internal class MastodonPush(
                 return
             }
             throw error
+        } catch (error: MastodonException) {
+            // The response validator turns JSON error bodies into MastodonException.
+            if (error.statusCode == 404) {
+                return
+            }
+            throw error
         }
     }
 
@@ -207,6 +214,13 @@ internal class MastodonPush(
             throw error
         } catch (error: ResponseException) {
             if (error.response.status.value == 401 || error.response.status.value == 403) {
+                throw PushReauthRequiredException(error.message, error)
+            }
+            throw error
+        } catch (error: MastodonException) {
+            // Mastodon/GoToSocial send {"error": "..."} bodies, which the validator rethrows as
+            // MastodonException carrying the HTTP status.
+            if (error.statusCode == 401 || error.statusCode == 403) {
                 throw PushReauthRequiredException(error.message, error)
             }
             throw error

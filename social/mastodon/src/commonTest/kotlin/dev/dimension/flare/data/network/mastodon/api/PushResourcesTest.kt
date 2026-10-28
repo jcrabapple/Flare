@@ -6,6 +6,7 @@ import dev.dimension.flare.common.JSON
 import dev.dimension.flare.data.datasource.mastodon.MastodonPush
 import dev.dimension.flare.data.network.mastodon.api.model.InstanceData
 import dev.dimension.flare.data.network.mastodon.api.model.InstanceInfoV1
+import dev.dimension.flare.data.network.mastodon.installMastodonErrorMapping
 import dev.dimension.flare.data.network.nullableFallbackJson
 import dev.dimension.flare.data.push.PushCategory
 import dev.dimension.flare.data.push.PushReauthRequiredException
@@ -67,10 +68,14 @@ private fun mockPushResources(
 private fun mockPushResources(
     responses: List<Pair<HttpStatusCode, String>>,
     capture: (CapturedRequest) -> Unit,
+    productionErrorMapping: Boolean = false,
 ): PushResources {
     val client =
         HttpClient(MockEngine) {
             expectSuccess = true
+            if (productionErrorMapping) {
+                installMastodonErrorMapping()
+            }
             install(ContentNegotiation) {
                 nullableFallbackJson(JSON)
             }
@@ -295,6 +300,64 @@ class PushResourcesTest {
                     status = HttpStatusCode.NotFound,
                     body = "not found",
                     capture = { },
+                )
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE)
+
+            push.unsubscribePush("https://ntfy.example/topic")
+        }
+
+    // Real servers answer with JSON error bodies, which MastodonService's validator rethrows as
+    // MastodonException; these use the production validator instead of raw ResponseException.
+    @Test
+    fun subscribeMapsForbiddenJsonErrorBodyToPushReauthRequiredException() =
+        runTest {
+            val resources =
+                mockPushResources(
+                    responses = listOf(HttpStatusCode.Forbidden to """{"error":"This action is outside the authorized scopes"}"""),
+                    capture = { },
+                    productionErrorMapping = true,
+                )
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE)
+
+            assertFailsWith<PushReauthRequiredException> {
+                push.subscribePush(
+                    endpoint = "https://ntfy.example/topic",
+                    p256dh = "P256DH_KEY",
+                    auth = "AUTH_KEY",
+                    categories = setOf(PushCategory.Mention),
+                )
+            }
+        }
+
+    @Test
+    fun subscribePropagatesJsonErrorBodyWithNonReauthStatus() =
+        runTest {
+            val resources =
+                mockPushResources(
+                    responses = listOf(HttpStatusCode.UnprocessableEntity to """{"error":"Validation failed: Endpoint is invalid"}"""),
+                    capture = { },
+                    productionErrorMapping = true,
+                )
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE)
+
+            assertFailsWith<Exception> {
+                push.subscribePush(
+                    endpoint = "https://ntfy.example/topic",
+                    p256dh = "P256DH_KEY",
+                    auth = "AUTH_KEY",
+                    categories = setOf(PushCategory.Mention),
+                )
+            }.let { assertTrue(it !is PushReauthRequiredException) }
+        }
+
+    @Test
+    fun unsubscribePushSwallowsJsonErrorBody404() =
+        runTest {
+            val resources =
+                mockPushResources(
+                    responses = listOf(HttpStatusCode.NotFound to """{"error":"Record not found"}"""),
+                    capture = { },
+                    productionErrorMapping = true,
                 )
             val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE)
 

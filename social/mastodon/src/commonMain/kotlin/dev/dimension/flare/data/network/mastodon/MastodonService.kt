@@ -29,6 +29,7 @@ import dev.dimension.flare.data.network.mastodon.api.createTrendsResources
 import dev.dimension.flare.data.network.mastodon.api.model.MastodonPagingConverterFactory
 import dev.dimension.flare.data.network.mastodon.api.model.MediaAttachments
 import dev.dimension.flare.data.network.mastodon.api.model.UploadResponse
+import io.ktor.client.HttpClientConfig
 import io.ktor.client.plugins.HttpResponseValidator
 import io.ktor.client.plugins.ResponseException
 import io.ktor.client.plugins.api.createClientPlugin
@@ -75,6 +76,11 @@ private fun config(
     install(MastodonHeaderPlugin) {
         this.accessTokenFlow = accessTokenFlow
     }
+    installMastodonErrorMapping()
+}
+
+/** Rethrows `{"error": "..."}` error bodies as [MastodonException] carrying the HTTP status. */
+internal fun HttpClientConfig<*>.installMastodonErrorMapping() {
     HttpResponseValidator {
         handleResponseExceptionWithRequest { exception, _ ->
             if (exception is ResponseException) {
@@ -82,7 +88,7 @@ private fun config(
                     .bodyAsText()
                     .toMastodonExceptionOrNull()
                     ?.let {
-                        throw it
+                        throw it.copy(statusCode = exception.response.status.value)
                     }
             }
         }
