@@ -30,7 +30,9 @@ import dev.dimension.flare.model.AccountType
 import dev.dimension.flare.model.MicroBlogKey
 import dev.dimension.flare.ui.route.DeeplinkRoute
 import dev.dimension.flare.ui.route.toUri
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import org.koin.core.annotation.Provided
 import org.koin.core.annotation.Single
@@ -40,6 +42,12 @@ import kotlin.time.Duration.Companion.seconds
 internal class PushNotifier(
     @Provided private val context: Context,
 ) {
+    /**
+     * Test seam: loads an avatar bitmap for a URL (null URL → null bitmap). Defaults to the Coil
+     * loader; tests override to avoid the network.
+     */
+    internal var avatarLoader: suspend (String) -> Bitmap? = { url -> loadAvatar(url) }
+
     fun ensureChannels() {
         val manager = NotificationManagerCompat.from(context)
         channels.forEach { (id, nameRes) ->
@@ -49,18 +57,40 @@ internal class PushNotifier(
         }
     }
 
-    fun show(items: List<PushNotificationItem>) {
+    suspend fun show(items: List<PushNotificationItem>) {
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled()) return
+        // D13: the summary reflects what is showing. Count the notifications already active in
+        // each account's group (excluding its summary) before posting the new ones.
+        val activeCounts =
+            items
+                .groupBy { it.accountKey }
+                .mapValues { (accountKey, _) ->
+                    manager.activeNotifications.count {
+                        it.notification.group == groupKey(accountKey) && it.id != summaryId(accountKey)
+                    }
+                }
+        // Avatars load concurrently, each with its own timeout, so a full batch costs one
+        // timeout, not one per item.
+        val avatars =
+            coroutineScope {
+                items
+                    .map { item -> async { item to item.actorAvatarUrl?.let { avatarLoader(it) } } }
+                    .awaitAll()
+                    .toMap()
+            }
         items
             .groupBy { it.accountKey }
             .forEach { (accountKey, groupItems) ->
                 val group = groupKey(accountKey)
                 groupItems.forEach { item ->
-                    notify(manager, notificationId(item), buildNotification(item, group))
+                    notify(manager, notificationId(item), buildNotification(item, group, avatars[item]))
                 }
-                if (groupItems.size >= SUMMARY_THRESHOLD) {
-                    notify(manager, summaryId(accountKey), buildSummary(accountKey, groupItems, group))
+                val total = (activeCounts[accountKey] ?: 0) + groupItems.size
+                if (total >= SUMMARY_THRESHOLD) {
+                    notify(manager, summaryId(accountKey), buildSummary(accountKey, total, groupItems, group))
+                } else {
+                    manager.cancel(summaryId(accountKey))
                 }
             }
     }
@@ -95,17 +125,18 @@ internal class PushNotifier(
     private fun buildNotification(
         item: PushNotificationItem,
         group: String,
+        avatar: Bitmap?,
     ): Notification {
         val builder =
             NotificationCompat
                 .Builder(context, channelFor(item.type.category))
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(title(item))
                 .setGroup(group)
                 .setAutoCancel(true)
                 .setSubText(item.accountKey.host)
                 .setContentIntent(contentIntent(item))
-                .setLargeIcon(avatar(item.actorAvatarUrl))
+        avatar?.let { builder.setLargeIcon(it) }
         item.text?.let { builder.setStyle(NotificationCompat.BigTextStyle().bigText(it)) }
         // 0 means the time is unknown; setWhen(0) would render as 1970.
         if (item.createdAtEpochMillis != 0L) builder.setWhen(item.createdAtEpochMillis)
@@ -114,13 +145,14 @@ internal class PushNotifier(
 
     private fun buildSummary(
         accountKey: MicroBlogKey,
+        count: Int,
         groupItems: List<PushNotificationItem>,
         group: String,
     ): Notification =
         NotificationCompat
             .Builder(context, channelFor(groupItems.first().type.category))
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(context.getString(R.string.push_notif_summary, groupItems.size))
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(context.getString(R.string.push_notif_summary, count))
             .setGroup(group)
             .setGroupSummary(true)
             .setAutoCancel(true)
@@ -207,24 +239,20 @@ internal class PushNotifier(
 
     private fun launchIntent(): Intent = Intent(context, MainActivity::class.java)
 
-    private fun avatar(url: String?): Bitmap? {
-        if (url == null) return null
-        return runBlocking {
-            withTimeoutOrNull(ICON_TIMEOUT) {
-                runCatching {
-                    val loader = SingletonImageLoader.get(context)
-                    val request =
-                        ImageRequest
-                            .Builder(context)
-                            .data(url)
-                            .size(ICON_SIZE)
-                            .allowHardware(false)
-                            .build()
-                    (loader.execute(request) as? SuccessResult)?.image?.asDrawable(context.resources)?.toBitmap()
-                }.getOrNull()
-            }
+    private suspend fun loadAvatar(url: String): Bitmap? =
+        withTimeoutOrNull(ICON_TIMEOUT) {
+            runCatching {
+                val loader = SingletonImageLoader.get(context)
+                val request =
+                    ImageRequest
+                        .Builder(context)
+                        .data(url)
+                        .size(ICON_SIZE)
+                        .allowHardware(false)
+                        .build()
+                (loader.execute(request) as? SuccessResult)?.image?.asDrawable(context.resources)?.toBitmap()
+            }.getOrNull()
         }
-    }
 
     companion object {
         const val CHANNEL_MENTION = "push_mention"

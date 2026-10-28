@@ -11,8 +11,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -72,6 +75,43 @@ import org.koin.compose.koinInject
 
 private const val NTFY_DOCS_URL = "https://ntfy.sh/docs/subscribe/phone/"
 
+/**
+ * The screen's switch/selection logic, extracted from the callbacks so it can be unit-tested with
+ * fakes: every toggle reconciles the UnifiedPush registration, not just the stored setting.
+ */
+internal class NotificationSettingsActions(
+    private val service: PushNotificationService,
+    private val registrar: PushRegistrar,
+) {
+    /**
+     * Master switch: enabling registers every enabled account (auto-saving a single installed
+     * distributor); disabling unregisters everything and removes server subscriptions.
+     */
+    suspend fun setEnabled(value: Boolean) {
+        if (value) {
+            service.setEnabled(true)
+            registrar.sync()
+        } else {
+            registrar.disableAll()
+        }
+    }
+
+    /** Per-account switch: persist the toggle, then reconcile registrations. */
+    suspend fun setAccountEnabled(
+        accountKey: MicroBlogKey,
+        value: Boolean,
+    ) {
+        service.setAccountEnabled(accountKey, value)
+        registrar.sync()
+    }
+
+    /** Save the picked distributor, then register against it. */
+    suspend fun selectDistributor(packageName: String) {
+        registrar.selectDistributor(packageName)
+        registrar.sync()
+    }
+}
+
 /** Read-only view of push settings for [NotificationSettingsContent]. */
 @Stable
 internal interface NotificationSettingsState {
@@ -105,6 +145,7 @@ internal fun NotificationSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val service = koinInject<PushNotificationService>()
     val registrar = koinInject<PushRegistrar>()
+    val actions = remember(service, registrar) { NotificationSettingsActions(service, registrar) }
     val scope = rememberCoroutineScope()
     val pushEnabled by service.enabled.collectAsState(initial = false)
     val pushCategories by service.categories.collectAsState(initial = emptySet())
@@ -146,14 +187,9 @@ internal fun NotificationSettingsScreen(onBack: () -> Unit) {
                 }
                 scope.launch {
                     runCatching {
-                        if (value) {
-                            service.setEnabled(true)
-                            // Registers every enabled account; auto-saves a single installed distributor.
-                            registrar.sync()
-                        } else {
-                            // Unregisters from the distributor and removes server subscriptions.
-                            registrar.disableAll()
-                        }
+                        // Enable: registers every enabled account (auto-saves a single installed
+                        // distributor). Disable: unregisters and removes server subscriptions.
+                        actions.setEnabled(value)
                     }.onFailure { it.printStackTrace() }
                     distributorRefresh++
                 }
@@ -161,8 +197,7 @@ internal fun NotificationSettingsScreen(onBack: () -> Unit) {
             onSetAccountEnabled = { accountKey, value ->
                 scope.launch {
                     runCatching {
-                        service.setAccountEnabled(accountKey, value)
-                        registrar.sync()
+                        actions.setAccountEnabled(accountKey, value)
                     }.onFailure { it.printStackTrace() }
                 }
             },
@@ -172,9 +207,12 @@ internal fun NotificationSettingsScreen(onBack: () -> Unit) {
                 }
             },
             onSelectDistributor = { packageName ->
-                registrar.selectDistributor(packageName)
-                distributorRefresh++
-                scope.launch { runCatching { registrar.sync() }.onFailure { it.printStackTrace() } }
+                scope.launch {
+                    runCatching {
+                        actions.selectDistributor(packageName)
+                    }.onFailure { it.printStackTrace() }
+                    distributorRefresh++
+                }
             },
             onInstallNtfy = {
                 runCatching {
@@ -247,6 +285,7 @@ internal fun NotificationSettingsContent(
                 Modifier
                     .verticalScroll(rememberScrollState())
                     .padding(padding)
+                    .windowInsetsPadding(WindowInsets.navigationBars)
                     .padding(horizontal = screenHorizontalPadding),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -435,7 +474,11 @@ internal fun NotificationSettingsContent(
                     }
                 }
             },
-            confirmButton = {},
+            confirmButton = {
+                TextButton(onClick = { showDistributorPicker = false }) {
+                    Text(text = stringResource(id = android.R.string.cancel))
+                }
+            },
         )
     }
 }

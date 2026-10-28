@@ -1,28 +1,25 @@
 package dev.dimension.flare.push
 
-import android.content.Context
 import dev.dimension.flare.data.push.PushNotificationService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
-import org.koin.core.annotation.Provided
 import org.koin.core.annotation.Single
-import org.unifiedpush.android.connector.UnifiedPush
 
 @Single
 internal class PushRegistrar(
-    @Provided private val context: Context,
     private val service: PushNotificationService,
+    private val gateway: DistributorGateway,
 ) {
-    fun distributors(): List<String> = UnifiedPush.getDistributors(context)
+    fun distributors(): List<String> = gateway.getDistributors()
 
     /** The saved distributor, or null when none is saved or it has been uninstalled since. */
     fun currentDistributor(): String? =
-        UnifiedPush
-            .getSavedDistributor(context)
+        gateway
+            .getSavedDistributor()
             ?.takeIf { it.isNotBlank() && it in distributors() }
 
     fun selectDistributor(packageName: String) {
-        UnifiedPush.saveDistributor(context, packageName)
+        gateway.saveDistributor(packageName)
     }
 
     /** The saved distributor; if none is saved and exactly one is installed, saves and returns it. */
@@ -37,7 +34,7 @@ internal class PushRegistrar(
         val enabled = service.enabled.first()
         val known = service.accounts.first().map { it.accountKey }
         if (!enabled) {
-            known.forEach { UnifiedPush.unregister(context, it.toString()) }
+            known.forEach { gateway.unregister(it.toString()) }
             return
         }
         // UnifiedPush.register needs a saved, installed distributor. With exactly one installed
@@ -50,7 +47,7 @@ internal class PushRegistrar(
                 // null means the server has push off (the service marked the account
                 // ServerDisabled); there is nothing to register for that account.
                 val vapid = service.prepareRegistration(accountKey) ?: return@forEach
-                UnifiedPush.register(context, accountKey.toString(), MESSAGE_FOR_DISTRIBUTOR, vapid)
+                gateway.register(accountKey.toString(), MESSAGE_FOR_DISTRIBUTOR, vapid)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -67,7 +64,7 @@ internal class PushRegistrar(
                 .toSet()
         (supported - toRegister.toSet()).forEach { accountKey ->
             try {
-                UnifiedPush.unregister(context, accountKey.toString())
+                gateway.unregister(accountKey.toString())
                 service.deactivate(accountKey)
             } catch (e: CancellationException) {
                 throw e
@@ -80,7 +77,7 @@ internal class PushRegistrar(
     suspend fun disableAll() {
         val known = service.accounts.first().map { it.accountKey }
         known.forEach {
-            UnifiedPush.unregister(context, it.toString())
+            gateway.unregister(it.toString())
             // Best-effort server-side unsubscribe; marks the account Off.
             service.deactivate(it)
         }
