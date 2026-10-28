@@ -7,7 +7,7 @@ import org.unifiedpush.android.connector.UnifiedPush
 
 /**
  * The [UnifiedPush] connector calls [PushRegistrar] makes, as an injectable seam so the registrar's
- * D9 reconciliation decisions can be tested with a fake distributor (the connector is a static
+ * registration reconciliation decisions can be tested with a fake distributor (the connector is a static
  * object). The Koin binding is the default [UnifiedPushGateway]; App.kt needs no change.
  */
 internal interface DistributorGateway {

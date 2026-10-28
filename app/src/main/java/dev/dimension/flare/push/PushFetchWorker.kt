@@ -20,7 +20,7 @@ import kotlinx.coroutines.CancellationException
 import org.koin.core.context.GlobalContext
 
 /**
- * D12: fetches one account's new notifications after a push wake-up and hands them to
+ * Fetches one account's new notifications after a push wake-up and hands them to
  * [PushNotifier]. Pushes for the same account run one after another (APPEND_OR_REPLACE on a unique
  * per-account work name); each run only fetches what is newer than the stored lastSeenId, so a burst
  * costs extra runs, never duplicate notifications.
@@ -75,7 +75,7 @@ internal class PushFetchWorker
         companion object {
             const val KEY_ACCOUNT_KEY = "accountKey"
 
-            /** D12: at most 3 attempts in total for transient failures. */
+            /** At most 3 attempts in total for transient failures. */
             const val MAX_ATTEMPTS = 3
 
             private const val WORK_NAME_PREFIX = "push-fetch-"

@@ -60,7 +60,7 @@ internal class PushNotifier(
     suspend fun show(items: List<PushNotificationItem>) {
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled()) return
-        // D13: the summary reflects what is showing. Count the notifications already active in
+        // The summary reflects what is showing. Count the notifications already active in
         // each account's group (excluding its summary) before posting the new ones.
         val activeCounts =
             items

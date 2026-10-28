@@ -21,7 +21,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.koin.core.annotation.Single
 
-// Push limit per wake-up, see DESIGN.md D4/D6.
+// Max notifications fetched per push wake-up.
 private const val FETCH_LIMIT = 30
 
 @Single(binds = [PushNotificationService::class])
@@ -69,7 +69,7 @@ internal class PushNotificationRepository(
 
     override suspend fun setEnabled(enabled: Boolean) {
         // Only the global flag changes; per-account lastSeenId is kept so re-enabling resumes
-        // instead of re-posting everything since the subscription (DESIGN.md D6).
+        // instead of re-posting everything since the subscription.
         settings.updateData { it.copy(enabled = enabled) }
     }
 
@@ -178,7 +178,7 @@ internal class PushNotificationRepository(
                 }
                 return@withLock
             }
-            // D6: baseline whenever this is a fresh subscription (no stored endpoint: first subscribe, or
+            // Baseline whenever this is a fresh subscription (no stored endpoint: first subscribe, or
             // re-activation after deactivate/onUnregistered) so enabling push never floods notifications
             // that piled up while it was off. A re-subscribe for an endpoint refresh keeps lastSeenId so
             // nothing that arrived during the refresh is skipped.
@@ -245,7 +245,7 @@ internal class PushNotificationRepository(
 
     override suspend fun fetchNew(accountKey: MicroBlogKey): List<PushNotificationItem> =
         // One mutex per account: concurrent wake-ups for the same account are serialized so a
-        // second fetch sees the advanced lastSeenId and cannot double-post (DESIGN.md D12). The
+        // second fetch sees the advanced lastSeenId and cannot double-post. The
         // same mutex guards the re-registration/unsubscribe settings transitions in onNewEndpoint,
         // deactivate and onUnregistered; nothing under the lock calls another locked method.
         mutexFor(accountKey).withLock {

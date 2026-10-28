@@ -174,7 +174,7 @@ class PushFetchWorkerTest {
     @Test
     fun transientErrorFailsAtMaxAttempts() {
         val service = FakePushNotificationService { throw IOException("offline") }
-        // runAttemptCount 2 = the third and last attempt (D12: max 3 attempts).
+        // runAttemptCount 2 = the third and last attempt (max 3 attempts).
         val result = runBlocking { runWorker(service, runAttemptCount = PushFetchWorker.MAX_ATTEMPTS - 1) }
         assertTrue(result is ListenableWorker.Result.Failure)
     }

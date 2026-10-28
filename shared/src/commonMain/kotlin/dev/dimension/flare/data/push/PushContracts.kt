@@ -4,7 +4,7 @@ import dev.dimension.flare.model.MicroBlogKey
 import kotlinx.serialization.Serializable
 import kotlin.native.HiddenFromObjC
 
-/** Kind of a notification fetched after a push wake-up. See .ntfy-plan/DESIGN.md D7. */
+/** Kind of a notification fetched after a push wake-up. */
 public enum class PushNotificationType {
     Mention,
     Reply,

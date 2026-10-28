@@ -56,7 +56,7 @@ internal class FlarePushService : PushService() {
         message: PushMessage,
         instance: String,
     ) {
-        // D4: the decrypted payload is ignored; the message only wakes a fetch for the account.
+        // The decrypted payload is ignored; the message only wakes a fetch for the account.
         val accountKey = parseInstance(instance)
         if (accountKey == null) {
             unregister(instance)

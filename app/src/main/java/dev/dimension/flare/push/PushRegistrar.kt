@@ -26,7 +26,7 @@ internal class PushRegistrar(
     fun ensureDistributor(): String? = currentDistributor() ?: distributors().singleOrNull()?.also { selectDistributor(it) }
 
     /**
-     * D9: called on every app start. When push is enabled, (re-)register every account that should
+     * Called on every app start and whenever push settings change. When push is enabled, (re-)register every account that should
      * be registered and unregister + deactivate the ones that should no longer be; when push is
      * disabled, unregister every known instance.
      */
@@ -87,7 +87,7 @@ internal class PushRegistrar(
     companion object {
         const val NTFY_PACKAGE = "io.heckel.ntfy"
 
-        /** D8: short description shown to the distributor for our registrations. */
+        /** Short description shown to the distributor for our registrations. */
         const val MESSAGE_FOR_DISTRIBUTOR = "Flare"
     }
 }
