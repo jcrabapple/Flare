@@ -5,6 +5,8 @@ import de.jensklingenberg.ktorfit.ktorfit
 import dev.dimension.flare.common.JSON
 import dev.dimension.flare.data.network.misskey.api.createAccountApi
 import dev.dimension.flare.data.network.misskey.api.createMetaApi
+import dev.dimension.flare.data.network.misskey.api.model.MisskeyException
+import dev.dimension.flare.data.network.misskey.api.model.SwRegisterRequest
 import dev.dimension.flare.data.network.misskey.installMisskeyErrorMapping
 import dev.dimension.flare.data.network.nullableFallbackJson
 import dev.dimension.flare.data.push.PushCategory
@@ -249,6 +251,16 @@ class MisskeyPushRequestTest {
             // sendReadMessage=false is the SwRegisterRequest schema default, so kotlinx JSON (encodeDefaults=false)
             // elides it; the Misskey server default for an omitted flag is false, which is what we want.
             assertTrue("\"sendReadMessage\":true" !in body, "sendReadMessage must not be true in $body")
+            // Pin the model default explicitly: with encodeDefaults=false the wire test above cannot
+            // tell a `false` value from a dropped field.
+            assertEquals(
+                false,
+                SwRegisterRequest(
+                    endpoint = "https://ntfy.example/flare-topic",
+                    auth = "AUTHSECRET",
+                    publickey = "P256DHKEY",
+                ).sendReadMessage,
+            )
         }
 
     @Test
@@ -261,6 +273,47 @@ class MisskeyPushRequestTest {
                 assertFailsWith<IllegalArgumentException> {
                     push.subscribePush(
                         endpoint = "http://ntfy.example/flare-topic",
+                        p256dh = "P256DHKEY",
+                        auth = "AUTHSECRET",
+                        categories = emptySet(),
+                    )
+                }
+
+            assertEquals("Misskey requires an https push endpoint", error.message)
+            assertTrue(captured.isEmpty(), "no request should reach the server")
+        }
+
+    @Test
+    fun subscribePushAcceptsUppercaseHttpsScheme() =
+        runTest {
+            // ignoreCase = true: HTTPS:// is a valid https scheme for the local pre-check.
+            val captured = mutableListOf<Captured>()
+            val push =
+                mockPush(
+                    responses = listOf(HttpStatusCode.OK to SW_REGISTER_RESPONSE_JSON),
+                    captured = captured,
+                )
+
+            push.subscribePush(
+                endpoint = "HTTPS://ntfy.example/flare-topic",
+                p256dh = "P256DHKEY",
+                auth = "AUTHSECRET",
+                categories = emptySet(),
+            )
+
+            assertEquals("/api/sw/register", captured.single().path)
+        }
+
+    @Test
+    fun subscribePushRejectsEndpointWithUserInfoWithoutCallingServer() =
+        runTest {
+            val captured = mutableListOf<Captured>()
+            val push = mockPush(emptyList(), captured)
+
+            val error =
+                assertFailsWith<IllegalArgumentException> {
+                    push.subscribePush(
+                        endpoint = "https://user@ntfy.example/flare-topic",
                         p256dh = "P256DHKEY",
                         auth = "AUTHSECRET",
                         categories = emptySet(),
@@ -329,6 +382,47 @@ class MisskeyPushRequestTest {
         }
 
     @Test
+    fun unsubscribePushSwallowsJsonErrorBody404() =
+        runTest {
+            // Real Misskey servers answer a gone registration with a JSON error body, which the
+            // production validator rethrows as MisskeyException carrying the HTTP status.
+            val captured = mutableListOf<Captured>()
+            val push =
+                mockPush(
+                    responses =
+                        listOf(
+                            HttpStatusCode.NotFound to
+                                """{"error":{"message":"No such registration.","code":"NO_SUCH_REGISTRATION","id":"0141126a-b4de-4d4d-a1c8-9c5b1b1e7c7c","kind":"client"}}""",
+                        ),
+                    captured = captured,
+                    productionErrorMapping = true,
+                )
+
+            push.unsubscribePush("https://ntfy.example/flare-topic")
+
+            assertEquals("/api/sw/unregister", captured.single().path)
+        }
+
+    @Test
+    fun unsubscribePushPropagatesOtherJsonErrorBodies() =
+        runTest {
+            val push =
+                mockPush(
+                    responses =
+                        listOf(
+                            HttpStatusCode.InternalServerError to
+                                """{"error":{"message":"Internal error occurred.","code":"INTERNAL_ERROR","id":"5d37dbcb-891e-41ca-a3d6-6a3429261f26","kind":"server"}}""",
+                        ),
+                    captured = mutableListOf(),
+                    productionErrorMapping = true,
+                )
+
+            assertFailsWith<MisskeyException> {
+                push.unsubscribePush("https://ntfy.example/flare-topic")
+            }
+        }
+
+    @Test
     fun unsubscribePushPropagatesOtherErrors() =
         runTest {
             val push =
@@ -386,6 +480,76 @@ class MisskeyPushRequestTest {
                 )
             assertFailsWith<Exception> {
                 push.subscribePush("https://ntfy.example/flare-topic", "P256DH", "AUTH", setOf(PushCategory.Mention))
+            }.let { assertTrue(it !is PushReauthRequiredException) }
+        }
+
+    // The fetch path must map a revoked credential to PushReauthRequiredException with the same
+    // mapping subscribePush uses, so the repository can flip the account to ReauthRequired.
+    @Test
+    fun fetchNotificationsSinceMapsPermissionDeniedBodyToReauthRequired() =
+        runTest {
+            val push =
+                mockPush(
+                    listOf(
+                        HttpStatusCode.Forbidden to
+                            """{"error":{"message":"Your app does not have the necessary permissions to use this endpoint.","code":"PERMISSION_DENIED","id":"1370e5b7-d4eb-4566-bb1d-7748ee6a1838","kind":"client"}}""",
+                    ),
+                    mutableListOf(),
+                    productionErrorMapping = true,
+                )
+
+            assertFailsWith<PushReauthRequiredException> {
+                push.fetchNotificationsSince(sinceId = "n1", limit = 30)
+            }
+        }
+
+    @Test
+    fun latestNotificationIdMapsAuthenticationFailedBodyToReauthRequired() =
+        runTest {
+            val push =
+                mockPush(
+                    listOf(
+                        HttpStatusCode.Unauthorized to
+                            """{"error":{"message":"Authentication failed. Please ensure your token is correct.","code":"AUTHENTICATION_FAILED","id":"b0a7f5f8-dc2f-4171-b91f-de88ad238e14","kind":"client"}}""",
+                    ),
+                    mutableListOf(),
+                    productionErrorMapping = true,
+                )
+
+            assertFailsWith<PushReauthRequiredException> {
+                push.latestNotificationId()
+            }
+        }
+
+    @Test
+    fun fetchNotificationsSinceMapsRawUnauthorizedToReauthRequired() =
+        runTest {
+            val push =
+                mockPush(
+                    listOf(HttpStatusCode.Unauthorized to "{}"),
+                    mutableListOf(),
+                )
+
+            assertFailsWith<PushReauthRequiredException> {
+                push.fetchNotificationsSince(sinceId = "n1", limit = 30)
+            }
+        }
+
+    @Test
+    fun fetchNotificationsSincePropagatesOtherErrorBodies() =
+        runTest {
+            val push =
+                mockPush(
+                    listOf(
+                        HttpStatusCode.InternalServerError to
+                            """{"error":{"message":"Internal error occurred.","code":"INTERNAL_ERROR","id":"5d37dbcb-891e-41ca-a3d6-6a3429261f26","kind":"server"}}""",
+                    ),
+                    mutableListOf(),
+                    productionErrorMapping = true,
+                )
+
+            assertFailsWith<Exception> {
+                push.fetchNotificationsSince(sinceId = "n1", limit = 30)
             }.let { assertTrue(it !is PushReauthRequiredException) }
         }
 }

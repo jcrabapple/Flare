@@ -2,9 +2,11 @@ package dev.dimension.flare.data.datasource.mastodon
 
 import dev.dimension.flare.common.decodeJson
 import dev.dimension.flare.data.network.mastodon.api.model.Notification
+import dev.dimension.flare.data.network.mastodon.api.model.NotificationTypes
 import dev.dimension.flare.data.network.mastodon.api.model.Status
 import dev.dimension.flare.data.push.PushCategory
 import dev.dimension.flare.data.push.PushNotificationType
+import dev.dimension.flare.data.push.category
 import dev.dimension.flare.model.MicroBlogKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -193,6 +195,77 @@ class MastodonPushTest {
         val notification = Notification(id = "1", type = null, status = Status(content = "<p></p>"))
 
         assertNull(notification.toPushNotificationItem(ACCOUNT_KEY)!!.text)
+    }
+
+    @Test
+    fun quoteNotificationMapsToQuoteWithStatus() {
+        val notification = MENTION_WITH_CW_JSON.decodeJson<Notification>().copy(type = NotificationTypes.Quote)
+
+        val item = notification.toPushNotificationItem(ACCOUNT_KEY)!!
+
+        assertEquals(PushNotificationType.Quote, item.type)
+        assertEquals(PushCategory.Reblog, item.type.category)
+        assertEquals(
+            MicroBlogKey(id = "109843190626423984", host = "mastodon.social"),
+            item.statusKey,
+        )
+    }
+
+    @Test
+    fun quotedUpdateNotificationMapsToUpdateWithStatus() {
+        val notification = MENTION_WITH_CW_JSON.decodeJson<Notification>().copy(type = NotificationTypes.QuotedUpdate)
+
+        val item = notification.toPushNotificationItem(ACCOUNT_KEY)!!
+
+        assertEquals(PushNotificationType.Update, item.type)
+        assertEquals(PushCategory.Other, item.type.category)
+        assertEquals(
+            MicroBlogKey(id = "109843190626423984", host = "mastodon.social"),
+            item.statusKey,
+        )
+    }
+
+    @Test
+    fun wireQuoteTypesParseThroughJson() {
+        val notification = """{"id": "42", "type": "quote"}""".decodeJson<Notification>()
+        val quotedUpdate = """{"id": "43", "type": "quoted_update"}""".decodeJson<Notification>()
+
+        assertEquals(NotificationTypes.Quote, notification.type)
+        assertEquals(NotificationTypes.QuotedUpdate, quotedUpdate.type)
+    }
+
+    @Test
+    fun truncationDoesNotSplitSurrogatePairAtTheBoundary() {
+        // The emoji's high surrogate lands exactly on index 279; the cut must back off to 279.
+        val text = "a".repeat(279) + "😀"
+        val status = Status(content = "<p>$text</p>")
+        val notification = Notification(id = "1", type = null, status = status)
+
+        val item = notification.toPushNotificationItem(ACCOUNT_KEY)!!
+
+        assertEquals("a".repeat(279) + "…", item.text)
+        assertEquals(280, item.text!!.length)
+    }
+
+    @Test
+    fun truncationKeepsACompleteSurrogatePairBeforeTheCut() {
+        // The pair ends on index 279 (low surrogate last): take(280) already keeps it whole.
+        val text = "a".repeat(278) + "😀" + "b"
+        val status = Status(content = "<p>$text</p>")
+        val notification = Notification(id = "1", type = null, status = status)
+
+        val item = notification.toPushNotificationItem(ACCOUNT_KEY)!!
+
+        assertEquals("a".repeat(278) + "😀" + "…", item.text)
+    }
+
+    @Test
+    fun contentAtExactly280CharsIsNotTruncated() {
+        val text = "a".repeat(280)
+        val status = Status(content = "<p>$text</p>")
+        val notification = Notification(id = "1", type = null, status = status)
+
+        assertEquals(text, notification.toPushNotificationItem(ACCOUNT_KEY)!!.text)
     }
 
     @Test

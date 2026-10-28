@@ -111,6 +111,16 @@ internal fun Notification.render(accountKey: MicroBlogKey): UiTimelineV2 {
                     UiTimelineV2.Message.Type.Localized.MessageId
                         .PostUpdated
                 }
+
+                NotificationTypes.Quote -> {
+                    UiTimelineV2.Message.Type.Localized.MessageId
+                        .Quote
+                }
+
+                NotificationTypes.QuotedUpdate -> {
+                    UiTimelineV2.Message.Type.Localized.MessageId
+                        .PostUpdated
+                }
             }.let {
                 UiTimelineV2.Message.Type.Localized(it)
             }
@@ -128,6 +138,8 @@ internal fun Notification.render(accountKey: MicroBlogKey): UiTimelineV2 {
                     NotificationTypes.FollowRequest -> UiIcon.Follow
                     NotificationTypes.Status -> UiIcon.Edit
                     NotificationTypes.Update -> UiIcon.Edit
+                    NotificationTypes.Quote -> UiIcon.Quote
+                    NotificationTypes.QuotedUpdate -> UiIcon.Edit
                     null -> UiIcon.Info
                 },
             type = messageType,

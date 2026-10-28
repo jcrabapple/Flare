@@ -115,6 +115,7 @@ internal open class MastodonDataSource(
             accountKey = accountKey,
             resources = service,
             instance = service,
+            timeline = service,
         )
     }
 
@@ -197,17 +198,12 @@ internal open class MastodonDataSource(
 
     override suspend fun unsubscribePush(endpoint: String) = push.unsubscribePush(endpoint)
 
-    override suspend fun latestNotificationId(): String? = service.notification(limit = 1).firstOrNull()?.id
+    override suspend fun latestNotificationId(): String? = push.latestNotificationId()
 
     override suspend fun fetchNotificationsSince(
         sinceId: String?,
         limit: Int,
-    ): List<PushNotificationItem> =
-        service
-            .notification(
-                since_id = sinceId,
-                limit = limit,
-            ).mapNotNull { it.toPushNotificationItem(accountKey) }
+    ): List<PushNotificationItem> = push.fetchNotificationsSince(sinceId, limit)
 
     override suspend fun handle(
         event: PostEvent,

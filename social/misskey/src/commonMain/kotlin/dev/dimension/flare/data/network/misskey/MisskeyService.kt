@@ -74,9 +74,9 @@ private fun config(
  */
 internal fun HttpClientConfig<*>.installMisskeyErrorMapping(accountKey: MicroBlogKey?) {
     HttpResponseValidator {
-        validateResponse {
+        validateResponse { response ->
             runCatching {
-                it
+                response
                     .bodyAsText()
                     .decodeJson<MisskeyException>()
             }.getOrNull()
@@ -88,7 +88,7 @@ internal fun HttpClientConfig<*>.installMisskeyErrorMapping(accountKey: MicroBlo
                             platformId = MISSKEY_PLATFORM_ID,
                         )
                     } else {
-                        throw it
+                        throw it.copy(statusCode = response.status.value)
                     }
                 }
         }

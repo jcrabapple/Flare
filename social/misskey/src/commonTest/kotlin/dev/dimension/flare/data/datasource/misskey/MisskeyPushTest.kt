@@ -223,4 +223,54 @@ class MisskeyPushTest {
 
         assertEquals(0L, item.createdAtEpochMillis)
     }
+
+    @Test
+    fun truncationDoesNotSplitSurrogatePairAtTheBoundary() {
+        // The emoji's high surrogate lands exactly on index 279; the cut must back off to 279.
+        val notification = MENTION_JSON.decodeJson<Notification>()
+        val withEmoji = notification.copy(note = notification.note!!.copy(text = "a".repeat(279) + "😀"))
+
+        val item = withEmoji.toPushNotificationItem(ACCOUNT_KEY)!!
+
+        assertEquals("a".repeat(279) + "…", item.text)
+        assertEquals(280, item.text!!.length)
+    }
+
+    @Test
+    fun truncationKeepsACompleteSurrogatePairBeforeTheCut() {
+        // The pair ends on index 279 (low surrogate last): take(280) already keeps it whole.
+        val notification = MENTION_JSON.decodeJson<Notification>()
+        val withEmoji = notification.copy(note = notification.note!!.copy(text = "a".repeat(278) + "😀" + "b"))
+
+        val item = withEmoji.toPushNotificationItem(ACCOUNT_KEY)!!
+
+        assertEquals("a".repeat(278) + "😀" + "…", item.text)
+    }
+
+    @Test
+    fun otherTypeWithNoteGetsNoStatusKeyOrText() {
+        // A fork type carrying a note must not surface a third-party snippet under "Other".
+        val notification = UNKNOWN_TYPE_JSON.decodeJson<Notification>()
+        val strayNote = MENTION_JSON.decodeJson<Notification>().note!!.copy(id = "8a2b3c4d5e6f7a8b9c0d1e9f")
+        val withNote = notification.copy(note = strayNote)
+
+        val item = withNote.toPushNotificationItem(ACCOUNT_KEY)!!
+
+        assertEquals(PushNotificationType.Other, item.type)
+        assertNull(item.statusKey)
+        assertNull(item.text)
+    }
+
+    @Test
+    fun followTypeWithNoteGetsNoStatusKeyOrText() {
+        val notification = FOLLOW_JSON.decodeJson<Notification>()
+        val strayNote = MENTION_JSON.decodeJson<Notification>().note!!.copy(id = "8a2b3c4d5e6f7a8b9c0d1eaa")
+        val withNote = notification.copy(note = strayNote)
+
+        val item = withNote.toPushNotificationItem(ACCOUNT_KEY)!!
+
+        assertEquals(PushNotificationType.Follow, item.type)
+        assertNull(item.statusKey)
+        assertNull(item.text)
+    }
 }

@@ -4,8 +4,11 @@ import de.jensklingenberg.ktorfit.converter.ResponseConverterFactory
 import de.jensklingenberg.ktorfit.ktorfit
 import dev.dimension.flare.common.JSON
 import dev.dimension.flare.data.datasource.mastodon.MastodonPush
+import dev.dimension.flare.data.network.mastodon.api.TimelineResources
+import dev.dimension.flare.data.network.mastodon.api.createTimelineResources
 import dev.dimension.flare.data.network.mastodon.api.model.InstanceData
 import dev.dimension.flare.data.network.mastodon.api.model.InstanceInfoV1
+import dev.dimension.flare.data.network.mastodon.api.model.MastodonPagingConverterFactory
 import dev.dimension.flare.data.network.mastodon.installMastodonErrorMapping
 import dev.dimension.flare.data.network.nullableFallbackJson
 import dev.dimension.flare.data.push.PushCategory
@@ -37,6 +40,23 @@ private val NO_INSTANCE =
 
         override suspend fun instanceV1(): InstanceInfoV1 = throw NotImplementedError()
     }
+
+/** MastodonPush's timeline API is unused by these tests; a MockEngine-backed stub keeps it inert. */
+private val NO_TIMELINE: TimelineResources by lazy {
+    val client =
+        HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    respond("{}", HttpStatusCode.OK, headersOf("Content-Type", ContentType.Application.Json.toString()))
+                }
+            }
+        }
+    ktorfit {
+        baseUrl("https://example.com/")
+        httpClient(client)
+        converterFactories(ResponseConverterFactory(), MastodonPagingConverterFactory())
+    }.createTimelineResources()
+}
 
 private val SUBSCRIPTION_JSON =
     """
@@ -142,7 +162,7 @@ class PushResourcesTest {
                     body = SUBSCRIPTION_JSON,
                     capture = { captured = it },
                 )
-            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE)
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
 
             push.subscribePush(
                 endpoint = "https://ntfy.example/topic",
@@ -184,7 +204,7 @@ class PushResourcesTest {
                     body = SUBSCRIPTION_JSON,
                     capture = { captured = it },
                 )
-            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE)
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
 
             push.updatePushCategories(setOf(PushCategory.Follow, PushCategory.Poll))
 
@@ -230,6 +250,32 @@ class PushResourcesTest {
         }
 
     @Test
+    fun getSubscriptionNumericIdParsesToLenientString() =
+        runTest {
+            // Real Mastodon returns a numeric "id": 1. The shared JSON is lenient, so the number
+            // coerces to the string "1" without throwing — the NullableFallback sanitizer in
+            // NullableFallbackJsonContentConverter never engages here (it only runs on decode
+            // failure). Pinning the actual outcome: the id survives as "1", it is not null.
+            val resources =
+                mockPushResources(
+                    status = HttpStatusCode.OK,
+                    body =
+                        """
+                        {
+                          "id": 1,
+                          "endpoint": "https://ntfy.sh/flaretopic",
+                          "server_key": "BCk",
+                          "alerts": {},
+                          "policy": "all"
+                        }
+                        """.trimIndent(),
+                    capture = { },
+                )
+
+            assertEquals("1", resources.pushSubscription().id)
+        }
+
+    @Test
     fun subscribeMapsUnauthorizedToPushReauthRequiredException() =
         runTest {
             val resources =
@@ -238,7 +284,7 @@ class PushResourcesTest {
                     body = "unauthorized",
                     capture = { },
                 )
-            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE)
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
 
             assertFailsWith<PushReauthRequiredException> {
                 push.subscribePush(
@@ -259,7 +305,7 @@ class PushResourcesTest {
                     body = "forbidden",
                     capture = { },
                 )
-            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE)
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
 
             assertFailsWith<PushReauthRequiredException> {
                 push.subscribePush(
@@ -280,7 +326,7 @@ class PushResourcesTest {
                     body = "unprocessable",
                     capture = { },
                 )
-            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE)
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
 
             assertFailsWith<Exception> {
                 push.subscribePush(
@@ -301,7 +347,7 @@ class PushResourcesTest {
                     body = "not found",
                     capture = { },
                 )
-            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE)
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
 
             push.unsubscribePush("https://ntfy.example/topic")
         }
@@ -317,7 +363,7 @@ class PushResourcesTest {
                     capture = { },
                     productionErrorMapping = true,
                 )
-            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE)
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
 
             assertFailsWith<PushReauthRequiredException> {
                 push.subscribePush(
@@ -338,7 +384,7 @@ class PushResourcesTest {
                     capture = { },
                     productionErrorMapping = true,
                 )
-            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE)
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
 
             assertFailsWith<Exception> {
                 push.subscribePush(
@@ -359,7 +405,7 @@ class PushResourcesTest {
                     capture = { },
                     productionErrorMapping = true,
                 )
-            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE)
+            val push = MastodonPush(ACCOUNT_KEY, resources, NO_INSTANCE, NO_TIMELINE)
 
             push.unsubscribePush("https://ntfy.example/topic")
         }

@@ -4,6 +4,7 @@ import com.fleeksoft.ksoup.Ksoup
 import dev.dimension.flare.data.network.mastodon.MastodonException
 import dev.dimension.flare.data.network.mastodon.api.InstanceResources
 import dev.dimension.flare.data.network.mastodon.api.PushResources
+import dev.dimension.flare.data.network.mastodon.api.TimelineResources
 import dev.dimension.flare.data.network.mastodon.api.model.Notification
 import dev.dimension.flare.data.network.mastodon.api.model.NotificationTypes
 import dev.dimension.flare.data.network.mastodon.api.model.Status
@@ -86,6 +87,8 @@ private fun Notification.notificationType(): PushNotificationType =
         NotificationTypes.Poll -> PushNotificationType.Poll
         NotificationTypes.Status -> PushNotificationType.Status
         NotificationTypes.Update -> PushNotificationType.Update
+        NotificationTypes.Quote -> PushNotificationType.Quote
+        NotificationTypes.QuotedUpdate -> PushNotificationType.Update
         null -> PushNotificationType.Other
     }
 
@@ -102,46 +105,59 @@ private fun Status.pushText(): String? {
                 .trim()
         }
     if (raw.isEmpty()) return null
-    return if (raw.length > MAX_PUSH_TEXT_LENGTH) {
-        raw.take(MAX_PUSH_TEXT_LENGTH) + ELLIPSIS
-    } else {
-        raw
-    }
+    return truncatePushText(raw)
 }
+
+/** Truncates to [MAX_PUSH_TEXT_LENGTH] chars + ellipsis without splitting a surrogate pair. */
+internal fun truncatePushText(raw: String): String =
+    if (raw.length <= MAX_PUSH_TEXT_LENGTH) {
+        raw
+    } else {
+        val cut =
+            if (raw[MAX_PUSH_TEXT_LENGTH - 1].isHighSurrogate()) {
+                MAX_PUSH_TEXT_LENGTH - 1
+            } else {
+                MAX_PUSH_TEXT_LENGTH
+            }
+        raw.take(cut) + ELLIPSIS
+    }
 
 internal class MastodonPush(
     private val accountKey: MicroBlogKey,
     private val resources: PushResources,
     private val instance: InstanceResources,
+    private val timeline: TimelineResources,
 ) {
     /**
-     * VAPID public key from `GET api/v2/instance` (`configuration.vapid.public_key`), falling back to
-     * the v1 instance payload (carries the same field on Pleroma/Akkoma); [PushServerKey.Disabled]
-     * when neither exposes a key. v2 lookup errors fall through to the v1 fallback; v1 errors
-     * propagate.
+     * VAPID public key: first non-blank of the v2 `configuration.vapid.public_key` and the v1
+     * instance payload (`configuration.vapid.public_key`, then the Pleroma/Akkoma extension fields
+     * `pleroma.vapid_public_key` / `pleroma.vapidPublicKey` — Akkoma answers v2 with 404 and only
+     * exposes the key on v1). [PushServerKey.Disabled] when none exposes a key; v2 lookup errors
+     * fall through to v1, v1 errors propagate.
      */
     suspend fun pushServerKey(): PushServerKey {
         val v2PublicKey =
-            runCatching {
+            try {
                 instance
                     .instance()
                     .configuration
                     ?.vapid
                     ?.publicKey
-            }.getOrNull()
-        if (!v2PublicKey.isNullOrBlank()) {
-            return PushServerKey.Available(v2PublicKey)
-        }
-        val v1PublicKey =
-            instance
-                .instanceV1()
-                .configuration
-                ?.vapid
-                ?.publicKey
-        if (!v1PublicKey.isNullOrBlank()) {
-            return PushServerKey.Available(v1PublicKey)
-        }
-        return PushServerKey.Disabled
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                null
+            }
+        // Only hit v1 when v2 yielded no usable key (e.g. Akkoma answers v2 with 404).
+        val v1Instance = if (v2PublicKey.isNullOrBlank()) instance.instanceV1() else null
+        val publicKey =
+            listOfNotNull(
+                v2PublicKey,
+                v1Instance?.configuration?.vapid?.publicKey,
+                v1Instance?.pleroma?.vapidPublicKeySnake,
+                v1Instance?.pleroma?.vapidPublicKeyCamel,
+            ).firstOrNull { it.isNotBlank() }
+        return if (publicKey == null) PushServerKey.Disabled else PushServerKey.Available(publicKey)
     }
 
     suspend fun subscribePush(
@@ -173,18 +189,20 @@ internal class MastodonPush(
 
     suspend fun updatePushCategories(categories: Set<PushCategory>) {
         val alerts = alertsFor(categories)
-        resources.updatePushSubscription(
-            policy = "all",
-            mentionAlert = alerts.getValue("mention"),
-            statusAlert = alerts.getValue("status"),
-            reblogAlert = alerts.getValue("reblog"),
-            followAlert = alerts.getValue("follow"),
-            followRequestAlert = alerts.getValue("follow_request"),
-            favouriteAlert = alerts.getValue("favourite"),
-            pollAlert = alerts.getValue("poll"),
-            updateAlert = alerts.getValue("update"),
-            quoteAlert = alerts.getValue("quote"),
-        )
+        withReauthMapping {
+            resources.updatePushSubscription(
+                policy = "all",
+                mentionAlert = alerts.getValue("mention"),
+                statusAlert = alerts.getValue("status"),
+                reblogAlert = alerts.getValue("reblog"),
+                followAlert = alerts.getValue("follow"),
+                followRequestAlert = alerts.getValue("follow_request"),
+                favouriteAlert = alerts.getValue("favourite"),
+                pollAlert = alerts.getValue("poll"),
+                updateAlert = alerts.getValue("update"),
+                quoteAlert = alerts.getValue("quote"),
+            )
+        }
     }
 
     /** Mastodon keeps one server subscription per token, so [endpoint] is ignored here. */
@@ -206,6 +224,21 @@ internal class MastodonPush(
             throw error
         }
     }
+
+    suspend fun latestNotificationId(): String? =
+        withReauthMapping {
+            timeline.notification(limit = 1).firstOrNull()?.id
+        }
+
+    suspend fun fetchNotificationsSince(
+        sinceId: String?,
+        limit: Int,
+    ): List<PushNotificationItem> =
+        withReauthMapping {
+            timeline
+                .notification(since_id = sinceId, limit = limit)
+                .mapNotNull { it.toPushNotificationItem(accountKey) }
+        }
 
     private suspend fun <T> withReauthMapping(block: suspend () -> T): T =
         try {

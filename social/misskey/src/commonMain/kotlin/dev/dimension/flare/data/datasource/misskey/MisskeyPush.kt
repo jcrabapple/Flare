@@ -26,6 +26,18 @@ private const val ELLIPSIS = "…"
 /** Misskey error codes meaning the token cannot be used for sw/register. */
 private val REAUTH_ERROR_CODES = setOf("PERMISSION_DENIED", "AUTHENTICATION_FAILED", "CREDENTIAL_REQUIRED")
 
+/** Types whose notification carries the user's own note; other types must not surface note content. */
+private val NOTE_RELEVANT_TYPES =
+    setOf(
+        PushNotificationType.Mention,
+        PushNotificationType.Reply,
+        PushNotificationType.Reaction,
+        PushNotificationType.Reblog,
+        PushNotificationType.Quote,
+        PushNotificationType.Poll,
+        PushNotificationType.Status,
+    )
+
 /**
  * Wire `type` of `i/notifications` → push type. Misskey has no favourite/update kinds; anything not
  * mapped here (achievementEarned, app, followRequestAccepted, roleAssigned, test, …) is Other, which
@@ -48,16 +60,25 @@ internal fun misskeyNotificationType(type: String): PushNotificationType =
 internal fun Notification.toPushNotificationItem(accountKey: MicroBlogKey): PushNotificationItem? {
     val actor = user
     val host = accountKey.host
+    val pushType = misskeyNotificationType(type)
+    // Only surface note content for types whose payload is the user's own note; an unmapped fork
+    // type that carries a note would otherwise deep-link to a third-party post under "Other".
+    val noteRelevant = pushType in NOTE_RELEVANT_TYPES
     return PushNotificationItem(
         accountKey = accountKey,
         notificationId = id,
-        type = misskeyNotificationType(type),
+        type = pushType,
         actorName = actor?.name?.takeIf { it.isNotBlank() } ?: actor?.username,
         actorHandle = actor?.let { "@" + it.username + "@" + (it.host ?: host) },
         actorAvatarUrl = actor?.avatarUrl,
         actorKey = actor?.id?.let { MicroBlogKey(id = it, host = host) },
-        statusKey = note?.id?.let { MicroBlogKey(id = it, host = host) },
-        text = note?.pushText(),
+        statusKey =
+            if (noteRelevant) {
+                note?.id?.let { MicroBlogKey(id = it, host = host) }
+            } else {
+                null
+            },
+        text = if (noteRelevant) note?.pushText() else null,
         reaction = reaction,
         createdAtEpochMillis =
             runCatching {
@@ -76,11 +97,28 @@ private fun Note.pushText(): String? {
             text?.trim().orEmpty()
         }
     if (raw.isEmpty()) return null
-    return if (raw.length > MAX_PUSH_TEXT_LENGTH) {
-        raw.take(MAX_PUSH_TEXT_LENGTH) + ELLIPSIS
-    } else {
+    return truncatePushText(raw)
+}
+
+/** Truncates to [MAX_PUSH_TEXT_LENGTH] chars + ellipsis without splitting a surrogate pair. */
+internal fun truncatePushText(raw: String): String =
+    if (raw.length <= MAX_PUSH_TEXT_LENGTH) {
         raw
+    } else {
+        val cut =
+            if (raw[MAX_PUSH_TEXT_LENGTH - 1].isHighSurrogate()) {
+                MAX_PUSH_TEXT_LENGTH - 1
+            } else {
+                MAX_PUSH_TEXT_LENGTH
+            }
+        raw.take(cut) + ELLIPSIS
     }
+
+/** Misskey rejects non-https endpoints and endpoints carrying userinfo (`https://user@host/…`). */
+internal fun isValidPushEndpoint(endpoint: String): Boolean {
+    if (!endpoint.startsWith("https://", ignoreCase = true)) return false
+    val authority = endpoint.substringAfter("://", missingDelimiterValue = "").substringBefore('/')
+    return !authority.contains('@')
 }
 
 internal class MisskeyPush(
@@ -112,7 +150,7 @@ internal class MisskeyPush(
         auth: String,
         categories: Set<PushCategory>,
     ) {
-        if (!endpoint.startsWith("https://")) {
+        if (!isValidPushEndpoint(endpoint)) {
             throw IllegalArgumentException("Misskey requires an https push endpoint")
         }
         withReauthMapping {
@@ -141,31 +179,42 @@ internal class MisskeyPush(
                 return
             }
             throw error
+        } catch (error: MisskeyException) {
+            // The response validator turns JSON error bodies into MisskeyException carrying the
+            // HTTP status; a gone registration must not fail deactivation.
+            if (error.statusCode == 404) {
+                return
+            }
+            throw error
         }
     }
 
     suspend fun latestNotificationId(): String? =
-        accountApi
-            .iNotifications(
-                INotificationsRequest(
-                    limit = 1,
-                    markAsRead = false,
-                ),
-            ).firstOrNull()
-            ?.id
+        withReauthMapping {
+            accountApi
+                .iNotifications(
+                    INotificationsRequest(
+                        limit = 1,
+                        markAsRead = false,
+                    ),
+                ).firstOrNull()
+                ?.id
+        }
 
     suspend fun fetchNotificationsSince(
         sinceId: String?,
         limit: Int,
     ): List<PushNotificationItem> =
-        accountApi
-            .iNotifications(
-                INotificationsRequest(
-                    limit = limit,
-                    sinceId = sinceId,
-                    markAsRead = false,
-                ),
-            ).mapNotNull { it.toPushNotificationItem(accountKey) }
+        withReauthMapping {
+            accountApi
+                .iNotifications(
+                    INotificationsRequest(
+                        limit = limit,
+                        sinceId = sinceId,
+                        markAsRead = false,
+                    ),
+                ).mapNotNull { it.toPushNotificationItem(accountKey) }
+        }
 
     private suspend fun <T> withReauthMapping(block: suspend () -> T): T =
         try {

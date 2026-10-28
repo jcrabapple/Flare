@@ -9,6 +9,7 @@ import dev.dimension.flare.data.database.app.model.DbAccount
 import dev.dimension.flare.data.database.cache.CacheDatabase
 import dev.dimension.flare.data.database.createDatabaseDriver
 import dev.dimension.flare.data.datastore.AppDataStore
+import dev.dimension.flare.data.datastore.model.PushAccountSettings
 import dev.dimension.flare.data.io.OkioFileStorage
 import dev.dimension.flare.data.repository.AccountRepository
 import dev.dimension.flare.data.repository.ProxyRepository
@@ -28,6 +29,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -240,6 +242,7 @@ class PushNotificationRepositoryTest : RobolectricTest() {
             insertAccount(accountKey, TEST_PUSH_PLATFORM)
             val service = createService(this)
             service.setEnabled(true)
+            seedAccountState(accountKey, PushAccountState.Active)
             pushDataSource.notifications = listOf(pushItem("n1"))
             assertTrue(service.fetchNew(accountKey).isNotEmpty())
             assertEquals("n1", accountSettings(accountKey)?.lastSeenId)
@@ -306,6 +309,7 @@ class PushNotificationRepositoryTest : RobolectricTest() {
             insertAccount(accountKey, TEST_PUSH_PLATFORM)
             val service = createService(this)
             service.setEnabled(true)
+            seedAccountState(accountKey, PushAccountState.Active)
             pushDataSource.notifications =
                 listOf(
                     pushItem("n2"),
@@ -407,6 +411,196 @@ class PushNotificationRepositoryTest : RobolectricTest() {
             assertEquals(accountKey, removals.receive())
             observer.cancel()
         }
+
+    @Test
+    fun fetchNewDoesNoNetworkCallWhenStateIsOff() =
+        runTest {
+            insertAccount(accountKey, TEST_PUSH_PLATFORM)
+            val service = createService(this)
+            service.setEnabled(true)
+            seedAccountState(accountKey, PushAccountState.Off)
+            pushDataSource.notifications = listOf(pushItem("n1"))
+
+            assertTrue(service.fetchNew(accountKey).isEmpty())
+            assertTrue(pushDataSource.fetchCalls.isEmpty())
+        }
+
+    @Test
+    fun fetchNewDoesNoNetworkCallWhenStateIsServerDisabled() =
+        runTest {
+            insertAccount(accountKey, TEST_PUSH_PLATFORM)
+            val service = createService(this)
+            service.setEnabled(true)
+            seedAccountState(accountKey, PushAccountState.ServerDisabled)
+            pushDataSource.notifications = listOf(pushItem("n1"))
+
+            assertTrue(service.fetchNew(accountKey).isEmpty())
+            assertTrue(pushDataSource.fetchCalls.isEmpty())
+        }
+
+    @Test
+    fun fetchNewDoesNoNetworkCallWhenStateIsReauthRequired() =
+        runTest {
+            insertAccount(accountKey, TEST_PUSH_PLATFORM)
+            val service = createService(this)
+            service.setEnabled(true)
+            seedAccountState(accountKey, PushAccountState.ReauthRequired)
+            pushDataSource.notifications = listOf(pushItem("n1"))
+
+            assertTrue(service.fetchNew(accountKey).isEmpty())
+            assertTrue(pushDataSource.fetchCalls.isEmpty())
+        }
+
+    @Test
+    fun fetchNewDoesNoNetworkCallWhenStateIsUnsupported() =
+        runTest {
+            insertAccount(accountKey, TEST_PUSH_PLATFORM)
+            val service = createService(this)
+            service.setEnabled(true)
+            seedAccountState(accountKey, PushAccountState.Unsupported)
+            pushDataSource.notifications = listOf(pushItem("n1"))
+
+            assertTrue(service.fetchNew(accountKey).isEmpty())
+            assertTrue(pushDataSource.fetchCalls.isEmpty())
+        }
+
+    @Test
+    fun fetchNewStillFetchesWhenStateIsRegistering() =
+        runTest {
+            insertAccount(accountKey, TEST_PUSH_PLATFORM)
+            val service = createService(this)
+            service.setEnabled(true)
+            seedAccountState(accountKey, PushAccountState.Registering)
+            pushDataSource.notifications = listOf(pushItem("n1"))
+
+            assertEquals(listOf(pushItem("n1")), service.fetchNew(accountKey))
+            assertEquals(listOf<String?>(null), pushDataSource.fetchCalls)
+            assertEquals("n1", accountSettings(accountKey)?.lastSeenId)
+        }
+
+    @Test
+    fun fetchNewMarksReauthRequiredAndRethrows() =
+        runTest {
+            insertAccount(accountKey, TEST_PUSH_PLATFORM)
+            val service = createService(this)
+            service.setEnabled(true)
+            seedAccountState(accountKey, PushAccountState.Active)
+            pushDataSource.fetchError = PushReauthRequiredException("token revoked")
+
+            assertFailsWith<PushReauthRequiredException> {
+                service.fetchNew(accountKey)
+            }
+
+            val settings = accountSettings(accountKey)
+            assertEquals(PushAccountState.ReauthRequired, settings?.state)
+            assertEquals("token revoked", settings?.lastError)
+        }
+
+    @Test
+    fun setCategoriesMarksReauthRequiredWhenUpdateThrowsReauth() =
+        runTest {
+            insertAccount(accountKey, TEST_PUSH_PLATFORM)
+            val service = createService(this)
+            service.onNewEndpoint(accountKey, ENDPOINT, "p256dh-key", "auth-key")
+            pushDataSource.updatePushCategoriesError = PushReauthRequiredException("token lacks push scope")
+
+            service.setCategories(setOf(PushCategory.Mention))
+
+            val settings = accountSettings(accountKey)
+            assertEquals(PushAccountState.ReauthRequired, settings?.state)
+            assertEquals("token lacks push scope", settings?.lastError)
+        }
+
+    @Test
+    fun setCategoriesKeepsStateOnOtherUpdateErrors() =
+        runTest {
+            insertAccount(accountKey, TEST_PUSH_PLATFORM)
+            val service = createService(this)
+            service.onNewEndpoint(accountKey, ENDPOINT, "p256dh-key", "auth-key")
+            pushDataSource.updatePushCategoriesError = IllegalStateException("boom")
+
+            service.setCategories(setOf(PushCategory.Mention))
+
+            val settings = accountSettings(accountKey)
+            assertEquals(PushAccountState.Active, settings?.state)
+        }
+
+    @Test
+    fun onNewEndpointWaitsForInFlightFetchAndBaselinesLastSeenId() =
+        runTest {
+            insertAccount(accountKey, TEST_PUSH_PLATFORM)
+            val service = createService(this)
+            service.setEnabled(true)
+            pushDataSource.latestId = "n100"
+            pushDataSource.notifications = listOf(pushItem("n1"))
+            val gate = CompletableDeferred<Unit>()
+            pushDataSource.fetchGate = gate
+
+            val fetch = launch { service.fetchNew(accountKey) }
+            runCurrent()
+            val register = launch { service.onNewEndpoint(accountKey, ENDPOINT, "p256dh-key", "auth-key") }
+            runCurrent()
+            assertTrue(register.isActive, "onNewEndpoint must wait for the in-flight fetch")
+            gate.complete(Unit)
+            fetch.join()
+            register.join()
+
+            val settings = accountSettings(accountKey)
+            assertEquals(PushAccountState.Active, settings?.state)
+            assertEquals(ENDPOINT, settings?.endpoint)
+            // The baseline from onNewEndpoint wins over the lastSeenId the earlier fetch advanced.
+            assertEquals("n100", settings?.lastSeenId)
+        }
+
+    @Test
+    fun prepareRegistrationStoresUnsupportedForUnsupportedPlatform() =
+        runTest {
+            insertAccount(plainAccountKey, TEST_PLAIN_PLATFORM)
+            val service = createService(this)
+
+            assertNull(service.prepareRegistration(plainAccountKey))
+            val settings = accountSettings(plainAccountKey)
+            assertEquals(PushAccountState.Unsupported, settings?.state)
+            assertNull(settings?.lastError)
+        }
+
+    @Test
+    fun prepareRegistrationWritesNothingForRemovedAccount() =
+        runTest {
+            insertAccount(accountKey, TEST_PUSH_PLATFORM)
+            val service = createService(this)
+            accountRepository.delete(accountKey)
+
+            assertNull(service.prepareRegistration(accountKey))
+            assertNull(accountSettings(accountKey))
+        }
+
+    @Test
+    fun deactivateClearsLastError() =
+        runTest {
+            insertAccount(accountKey, TEST_PUSH_PLATFORM)
+            pushDataSource.latestId = "n100"
+            val service = createService(this)
+            service.onRegistrationFailed(accountKey, "distributor gone")
+            assertEquals("distributor gone", accountSettings(accountKey)?.lastError)
+
+            service.deactivate(accountKey)
+
+            val settings = accountSettings(accountKey)
+            assertEquals(PushAccountState.Off, settings?.state)
+            assertNull(settings?.lastError)
+        }
+
+    private suspend fun seedAccountState(
+        accountKey: MicroBlogKey,
+        state: PushAccountState,
+    ) {
+        appDataStore.pushSettingsStore.updateData { pushSettings ->
+            val key = accountKey.toString()
+            val current = pushSettings.accounts[key] ?: PushAccountSettings()
+            pushSettings.copy(accounts = pushSettings.accounts + (key to current.copy(state = state)))
+        }
+    }
 
     private suspend fun accountSettings(accountKey: MicroBlogKey) =
         appDataStore

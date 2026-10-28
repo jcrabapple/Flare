@@ -60,6 +60,8 @@ internal class FakePushDataSource(
 
     var subscribeError: Exception? = null
     var serverKeyError: Exception? = null
+    var updatePushCategoriesError: Exception? = null
+    var fetchError: Exception? = null
 
     /** Newest-first. */
     var notifications: List<PushNotificationItem> = emptyList()
@@ -97,6 +99,7 @@ internal class FakePushDataSource(
     }
 
     override suspend fun updatePushCategories(categories: Set<PushCategory>) {
+        updatePushCategoriesError?.let { throw it }
         updatePushCategoriesCalls.add(categories)
     }
 
@@ -117,6 +120,7 @@ internal class FakePushDataSource(
         if (concurrentFetches > maxConcurrentFetches) maxConcurrentFetches = concurrentFetches
         try {
             fetchGate?.await()
+            fetchError?.let { throw it }
             fetchCalls.add(sinceId)
             // Newest-first list: items strictly newer than sinceId are the ones BEFORE it.
             val newer =

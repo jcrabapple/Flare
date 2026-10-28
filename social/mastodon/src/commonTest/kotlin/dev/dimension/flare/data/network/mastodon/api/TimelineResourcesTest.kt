@@ -51,7 +51,17 @@ class TimelineResourcesTest {
             )
 
             assertEquals(
-                listOf("follow", "favourite", "reblog", "poll", "follow_request", "status", "update"),
+                listOf(
+                    "follow",
+                    "favourite",
+                    "reblog",
+                    "poll",
+                    "follow_request",
+                    "status",
+                    "update",
+                    "quote",
+                    "quoted_update",
+                ),
                 requestedUrl?.parameters?.getAll("exclude_types[]"),
             )
         }

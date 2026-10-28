@@ -85,11 +85,18 @@ internal class PushNotificationRepository(
         val pushSettings = settings.data.first()
         pushSettings.accounts.forEach { (key, accountSettings) ->
             if (accountSettings.state != Active) return@forEach
-            val dataSource = pushDataSourceOrNull(MicroBlogKey.valueOf(key)) ?: return@forEach
+            val accountKey = MicroBlogKey.valueOf(key)
+            val dataSource = pushDataSourceOrNull(accountKey) ?: return@forEach
             try {
                 dataSource.updatePushCategories(categories)
             } catch (error: CancellationException) {
                 throw error
+            } catch (error: PushReauthRequiredException) {
+                // The token lost the push scope (e.g. a PUT 403): the account is no longer usable
+                // for push until the user signs in again. Still not rethrown (contract).
+                updateAccountSettings(accountKey) {
+                    it.copy(state = PushAccountState.ReauthRequired, lastError = error.message)
+                }
             } catch (error: Exception) {
                 error.printStackTrace()
             }
@@ -109,12 +116,12 @@ internal class PushNotificationRepository(
     }
 
     override suspend fun prepareRegistration(accountKey: MicroBlogKey): String? {
+        // A removed account must not leave an orphan settings entry behind.
+        if (accountRepository.find(accountKey) == null) return null
         updateAccountSettings(accountKey) { it.copy(state = Registering, lastError = null) }
         val dataSource =
             pushDataSourceOrNull(accountKey) ?: run {
-                updateAccountSettings(accountKey) {
-                    it.copy(state = Error, lastError = NOT_SUPPORTED_MESSAGE)
-                }
+                updateAccountSettings(accountKey) { it.copy(state = Unsupported, lastError = null) }
                 return null
             }
         return try {
@@ -144,55 +151,60 @@ internal class PushNotificationRepository(
         p256dh: String,
         auth: String,
     ) {
-        val dataSource = pushDataSourceOrNull(accountKey)
-        if (dataSource == null) {
-            updateAccountSettings(accountKey) {
-                it.copy(state = Error, lastError = NOT_SUPPORTED_MESSAGE)
+        // Same per-account mutex as fetchNew: the settings read-modify-write below (subscribe →
+        // baseline → activate) must not interleave with an in-flight fetch. Network calls inside
+        // the lock are fine; nothing here calls another locked method.
+        mutexFor(accountKey).withLock {
+            val dataSource = pushDataSourceOrNull(accountKey)
+            if (dataSource == null) {
+                updateAccountSettings(accountKey) {
+                    it.copy(state = Error, lastError = NOT_SUPPORTED_MESSAGE)
+                }
+                return@withLock
             }
-            return
-        }
-        val categories = settings.data.first().categories
-        try {
-            dataSource.subscribePush(endpoint, p256dh, auth, categories)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: PushReauthRequiredException) {
-            updateAccountSettings(accountKey) {
-                it.copy(state = PushAccountState.ReauthRequired, lastError = error.message)
+            val categories = settings.data.first().categories
+            try {
+                dataSource.subscribePush(endpoint, p256dh, auth, categories)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: PushReauthRequiredException) {
+                updateAccountSettings(accountKey) {
+                    it.copy(state = PushAccountState.ReauthRequired, lastError = error.message)
+                }
+                return@withLock
+            } catch (error: Exception) {
+                updateAccountSettings(accountKey) {
+                    it.copy(state = Error, lastError = error.message ?: error::class.simpleName)
+                }
+                return@withLock
             }
-            return
-        } catch (error: Exception) {
-            updateAccountSettings(accountKey) {
-                it.copy(state = Error, lastError = error.message ?: error::class.simpleName)
-            }
-            return
-        }
-        // D6: baseline whenever this is a fresh subscription (no stored endpoint: first subscribe, or
-        // re-activation after deactivate/onUnregistered) so enabling push never floods notifications
-        // that piled up while it was off. A re-subscribe for an endpoint refresh keeps lastSeenId so
-        // nothing that arrived during the refresh is skipped.
-        val current = settings.data.first().accounts[accountKey.toString()]
-        val freshSubscription = current?.endpoint == null || current.lastSeenId == null
-        val baseline =
-            if (freshSubscription) {
-                try {
-                    dataSource.latestNotificationId()
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
-                    error.printStackTrace()
+            // D6: baseline whenever this is a fresh subscription (no stored endpoint: first subscribe, or
+            // re-activation after deactivate/onUnregistered) so enabling push never floods notifications
+            // that piled up while it was off. A re-subscribe for an endpoint refresh keeps lastSeenId so
+            // nothing that arrived during the refresh is skipped.
+            val current = settings.data.first().accounts[accountKey.toString()]
+            val freshSubscription = current?.endpoint == null || current.lastSeenId == null
+            val baseline =
+                if (freshSubscription) {
+                    try {
+                        dataSource.latestNotificationId()
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        error.printStackTrace()
+                        null
+                    }
+                } else {
                     null
                 }
-            } else {
-                null
+            updateAccountSettings(accountKey) {
+                it.copy(
+                    state = Active,
+                    endpoint = endpoint,
+                    lastError = null,
+                    lastSeenId = if (freshSubscription) baseline ?: it.lastSeenId else it.lastSeenId,
+                )
             }
-        updateAccountSettings(accountKey) {
-            it.copy(
-                state = Active,
-                endpoint = endpoint,
-                lastError = null,
-                lastSeenId = if (freshSubscription) baseline ?: it.lastSeenId else it.lastSeenId,
-            )
         }
     }
 
@@ -204,37 +216,61 @@ internal class PushNotificationRepository(
     }
 
     override suspend fun onUnregistered(accountKey: MicroBlogKey) {
-        updateAccountSettings(accountKey) { it.copy(state = Off, endpoint = null, lastError = null) }
+        mutexFor(accountKey).withLock {
+            updateAccountSettings(accountKey) { it.copy(state = Off, endpoint = null, lastError = null) }
+        }
     }
 
     override suspend fun deactivate(accountKey: MicroBlogKey) {
-        var storedEndpoint: String? = null
-        updateAccountSettings(accountKey) {
-            storedEndpoint = it.endpoint
-            it.copy(state = Off, endpoint = null)
-        }
-        val endpoint = storedEndpoint ?: return
-        val dataSource = pushDataSourceOrNull(accountKey) ?: return
-        try {
-            dataSource.unsubscribePush(endpoint)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            // Best-effort: the server drops the subscription once the credential is gone anyway.
-            error.printStackTrace()
+        mutexFor(accountKey).withLock {
+            var storedEndpoint: String? = null
+            updateAccountSettings(accountKey) {
+                storedEndpoint = it.endpoint
+                it.copy(state = Off, endpoint = null, lastError = null)
+            }
+            val endpoint = storedEndpoint ?: return@withLock
+            val dataSource = pushDataSourceOrNull(accountKey) ?: return@withLock
+            try {
+                dataSource.unsubscribePush(endpoint)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                // Best-effort: the server drops the subscription once the credential is gone anyway.
+                error.printStackTrace()
+            }
         }
     }
 
     override suspend fun fetchNew(accountKey: MicroBlogKey): List<PushNotificationItem> =
         // One mutex per account: concurrent wake-ups for the same account are serialized so a
-        // second fetch sees the advanced lastSeenId and cannot double-post (DESIGN.md D12).
+        // second fetch sees the advanced lastSeenId and cannot double-post (DESIGN.md D12). The
+        // same mutex guards the re-registration/unsubscribe settings transitions in onNewEndpoint,
+        // deactivate and onUnregistered; nothing under the lock calls another locked method.
         mutexFor(accountKey).withLock {
             val pushSettings = settings.data.first()
             if (!pushSettings.enabled) return emptyList()
             val accountSettings = pushSettings.accounts[accountKey.toString()]
             if (accountSettings?.enabled == false) return emptyList()
+            // A dead subscription must not fetch or advance lastSeenId: Off, ServerDisabled,
+            // ReauthRequired and Unsupported are terminal until a re-registration. Registering and
+            // Error are transient re-registration states, and an existing subscription must keep
+            // working meanwhile; a missing entry keeps the previous (fetch) behaviour.
+            val storedState = accountSettings?.state
+            if (storedState != null && storedState !in FETCHABLE_STATES) return emptyList()
             val dataSource = pushDataSourceOrNull(accountKey) ?: return emptyList()
-            val items = dataSource.fetchNotificationsSince(accountSettings?.lastSeenId, FETCH_LIMIT)
+            val items =
+                try {
+                    dataSource.fetchNotificationsSince(accountSettings?.lastSeenId, FETCH_LIMIT)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: PushReauthRequiredException) {
+                    // A revoked credential is permanent: record it so the UI can ask for a
+                    // re-login, then let the worker see the failure (no retry).
+                    updateAccountSettings(accountKey) {
+                        it.copy(state = PushAccountState.ReauthRequired, lastError = error.message)
+                    }
+                    throw error
+                }
             if (items.isEmpty()) return emptyList()
             // Ids are opaque strings (Mastodon numeric strings, GtS ULIDs, Misskey aid) — the list
             // is newest-first, so the newest id is the first item by position, never by comparison.
@@ -284,5 +320,8 @@ internal class PushNotificationRepository(
 
     private companion object {
         private const val NOT_SUPPORTED_MESSAGE = "Push notifications are not supported on this platform"
+
+        /** Account states an existing subscription may fetch from; anything else must not. */
+        private val FETCHABLE_STATES = setOf(Active, Registering, Error)
     }
 }
