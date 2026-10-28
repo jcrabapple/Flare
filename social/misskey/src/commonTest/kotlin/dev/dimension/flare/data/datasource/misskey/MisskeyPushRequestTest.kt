@@ -5,6 +5,7 @@ import de.jensklingenberg.ktorfit.ktorfit
 import dev.dimension.flare.common.JSON
 import dev.dimension.flare.data.network.misskey.api.createAccountApi
 import dev.dimension.flare.data.network.misskey.api.createMetaApi
+import dev.dimension.flare.data.network.misskey.installMisskeyErrorMapping
 import dev.dimension.flare.data.network.nullableFallbackJson
 import dev.dimension.flare.data.push.PushCategory
 import dev.dimension.flare.data.push.PushNotificationType
@@ -42,10 +43,14 @@ private class Captured(
 private fun mockPush(
     responses: List<Pair<HttpStatusCode, String>>,
     captured: MutableList<Captured>,
+    productionErrorMapping: Boolean = false,
 ): MisskeyPush {
     val client =
         HttpClient(MockEngine) {
             expectSuccess = true
+            if (productionErrorMapping) {
+                installMisskeyErrorMapping(ACCOUNT_KEY)
+            }
             install(ContentNegotiation) {
                 nullableFallbackJson(JSON)
             }
@@ -333,5 +338,52 @@ class MisskeyPushRequestTest {
             assertFailsWith<ResponseException> {
                 push.unsubscribePush("https://ntfy.example/flare-topic")
             }
+        }
+
+    // Real Misskey servers answer errors with JSON bodies that MisskeyService's validator rethrows as
+    // MisskeyException / RequireReLoginException; these tests use the production validator.
+    private suspend fun assertSubscribeNeedsReauth(
+        status: HttpStatusCode,
+        body: String,
+    ) {
+        val push = mockPush(listOf(status to body), mutableListOf(), productionErrorMapping = true)
+        assertFailsWith<PushReauthRequiredException> {
+            push.subscribePush("https://ntfy.example/flare-topic", "P256DH", "AUTH", setOf(PushCategory.Mention))
+        }
+    }
+
+    @Test
+    fun subscribePushMapsPermissionDeniedBodyToReauthRequired() =
+        runTest {
+            assertSubscribeNeedsReauth(
+                HttpStatusCode.Forbidden,
+                """{"error":{"message":"Your app does not have the necessary permissions to use this endpoint.","code":"PERMISSION_DENIED","id":"1370e5b7-d4eb-4566-bb1d-7748ee6a1838","kind":"client"}}""",
+            )
+        }
+
+    @Test
+    fun subscribePushMapsAuthenticationFailedBodyToReauthRequired() =
+        runTest {
+            assertSubscribeNeedsReauth(
+                HttpStatusCode.Unauthorized,
+                """{"error":{"message":"Authentication failed. Please ensure your token is correct.","code":"AUTHENTICATION_FAILED","id":"b0a7f5f8-dc2f-4171-b91f-de88ad238e14","kind":"client"}}""",
+            )
+        }
+
+    @Test
+    fun subscribePushPropagatesOtherErrorBodies() =
+        runTest {
+            val push =
+                mockPush(
+                    listOf(
+                        HttpStatusCode.BadRequest to
+                            """{"error":{"message":"Invalid param.","code":"INVALID_PARAM","id":"3d81ceae-475f-4600-b2a8-2bc116157532","kind":"client"}}""",
+                    ),
+                    mutableListOf(),
+                    productionErrorMapping = true,
+                )
+            assertFailsWith<Exception> {
+                push.subscribePush("https://ntfy.example/flare-topic", "P256DH", "AUTH", setOf(PushCategory.Mention))
+            }.let { assertTrue(it !is PushReauthRequiredException) }
         }
 }

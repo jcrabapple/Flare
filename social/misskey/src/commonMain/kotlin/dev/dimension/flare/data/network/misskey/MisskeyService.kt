@@ -32,6 +32,7 @@ import dev.dimension.flare.data.network.misskey.api.model.MisskeyException
 import dev.dimension.flare.data.platform.MISSKEY_PLATFORM_ID
 import dev.dimension.flare.data.repository.RequireReLoginException
 import dev.dimension.flare.model.MicroBlogKey
+import io.ktor.client.HttpClientConfig
 import io.ktor.client.plugins.DefaultRequest
 import io.ktor.client.plugins.HttpResponseValidator
 import io.ktor.client.request.forms.MultiPartFormDataContent
@@ -63,28 +64,36 @@ private fun config(
                 header(HttpHeaders.ContentType, ContentType.Application.Json)
             }
         }
-        HttpResponseValidator {
-            validateResponse {
-                runCatching {
-                    it
-                        .bodyAsText()
-                        .decodeJson<MisskeyException>()
-                }.getOrNull()
-                    ?.takeIf { it.error != null }
-                    ?.let {
-                        if (it.error?.code == "PERMISSION_DENIED" && accountKey != null) {
-                            throw RequireReLoginException(
-                                accountKey = accountKey,
-                                platformId = MISSKEY_PLATFORM_ID,
-                            )
-                        } else {
-                            throw it
-                        }
-                    }
-            }
-        }
+        installMisskeyErrorMapping(accountKey)
     },
 )
+
+/**
+ * Rethrows Misskey `{"error": {...}}` bodies as [MisskeyException], or [RequireReLoginException] for
+ * PERMISSION_DENIED on an authenticated client.
+ */
+internal fun HttpClientConfig<*>.installMisskeyErrorMapping(accountKey: MicroBlogKey?) {
+    HttpResponseValidator {
+        validateResponse {
+            runCatching {
+                it
+                    .bodyAsText()
+                    .decodeJson<MisskeyException>()
+            }.getOrNull()
+                ?.takeIf { it.error != null }
+                ?.let {
+                    if (it.error?.code == "PERMISSION_DENIED" && accountKey != null) {
+                        throw RequireReLoginException(
+                            accountKey = accountKey,
+                            platformId = MISSKEY_PLATFORM_ID,
+                        )
+                    } else {
+                        throw it
+                    }
+                }
+        }
+    }
+}
 
 internal class MisskeyService(
     baseUrl: String,

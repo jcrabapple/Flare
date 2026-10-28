@@ -5,6 +5,7 @@ import dev.dimension.flare.data.network.misskey.api.MetaApi
 import dev.dimension.flare.data.network.misskey.api.model.EndpointRequest
 import dev.dimension.flare.data.network.misskey.api.model.INotificationsRequest
 import dev.dimension.flare.data.network.misskey.api.model.MetaRequest
+import dev.dimension.flare.data.network.misskey.api.model.MisskeyException
 import dev.dimension.flare.data.network.misskey.api.model.Note
 import dev.dimension.flare.data.network.misskey.api.model.Notification
 import dev.dimension.flare.data.network.misskey.api.model.SwRegisterRequest
@@ -13,6 +14,7 @@ import dev.dimension.flare.data.push.PushNotificationItem
 import dev.dimension.flare.data.push.PushNotificationType
 import dev.dimension.flare.data.push.PushReauthRequiredException
 import dev.dimension.flare.data.push.PushServerKey
+import dev.dimension.flare.data.repository.RequireReLoginException
 import dev.dimension.flare.model.MicroBlogKey
 import io.ktor.client.plugins.ResponseException
 import kotlinx.coroutines.CancellationException
@@ -20,6 +22,9 @@ import kotlin.time.Instant
 
 private const val MAX_PUSH_TEXT_LENGTH = 280
 private const val ELLIPSIS = "…"
+
+/** Misskey error codes meaning the token cannot be used for sw/register. */
+private val REAUTH_ERROR_CODES = setOf("PERMISSION_DENIED", "AUTHENTICATION_FAILED", "CREDENTIAL_REQUIRED")
 
 /**
  * Wire `type` of `i/notifications` → push type. Misskey has no favourite/update kinds; anything not
@@ -169,6 +174,15 @@ internal class MisskeyPush(
             throw error
         } catch (error: ResponseException) {
             if (error.response.status.value == 401 || error.response.status.value == 403) {
+                throw PushReauthRequiredException(error.message, error)
+            }
+            throw error
+        } catch (error: RequireReLoginException) {
+            // MisskeyService's validator turns PERMISSION_DENIED bodies into this.
+            throw PushReauthRequiredException(error.message, error)
+        } catch (error: MisskeyException) {
+            // Real servers send {"error": {"code": ...}} bodies, which the validator rethrows.
+            if (error.error?.code in REAUTH_ERROR_CODES) {
                 throw PushReauthRequiredException(error.message, error)
             }
             throw error
