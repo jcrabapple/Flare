@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import compose.icons.FontAwesomeIcons
 import compose.icons.fontawesomeicons.Solid
+import compose.icons.fontawesomeicons.solid.Bell
 import compose.icons.fontawesomeicons.solid.CircleInfo
 import compose.icons.fontawesomeicons.solid.CircleUser
 import compose.icons.fontawesomeicons.solid.Database
@@ -89,6 +90,7 @@ internal fun SettingsScreen(
     toAppearanceDisplay: () -> Unit,
     toAppearanceMedia: () -> Unit,
     toBehavior: () -> Unit,
+    toNotifications: () -> Unit,
     toStorage: () -> Unit,
     toAbout: () -> Unit,
     toColorSpace: () -> Unit,
@@ -266,6 +268,26 @@ internal fun SettingsScreen(
                 },
                 supportingContent = {
                     Text(text = stringResource(id = R.string.settings_behavior_description))
+                },
+            )
+
+            SegmentedListItem(
+                onClick = {
+                    toNotifications.invoke()
+                },
+                shapes = ListItemDefaults.single(),
+                content = {
+                    Text(text = stringResource(id = R.string.push_settings_title))
+                },
+                leadingContent = {
+                    ThemedIcon(
+                        imageVector = FontAwesomeIcons.Solid.Bell,
+                        contentDescription = stringResource(id = R.string.push_settings_title),
+                        color = ThemeIconData.Color.SapphireBlue,
+                    )
+                },
+                supportingContent = {
+                    Text(text = stringResource(id = R.string.push_settings_subtitle))
                 },
             )
 
