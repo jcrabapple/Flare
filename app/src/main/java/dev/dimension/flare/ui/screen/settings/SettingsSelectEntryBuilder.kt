@@ -42,6 +42,9 @@ internal fun EntryProviderScope<NavKey>.settingsSelectEntryBuilder(
             toBehavior = {
                 navigate(Route.Settings.Behavior)
             },
+            toNotifications = {
+                navigate(Route.Settings.Notifications)
+            },
             toStorage = {
                 navigate(Route.Settings.Storage)
             },
@@ -156,6 +159,14 @@ internal fun EntryProviderScope<NavKey>.settingsSelectEntryBuilder(
             },
             onBack = onBack,
         )
+    }
+
+    entry<Route.Settings.Notifications>(
+        metadata = ListDetailSceneStrategy.detailPane(
+            sceneKey = "Settings"
+        )
+    ) {
+        NotificationSettingsScreen(onBack = onBack)
     }
 
     entry<Route.Settings.LinkOpenDefaults>(
