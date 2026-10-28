@@ -93,6 +93,16 @@ android {
         }
     }
 
+    // Robolectric tests (dev.dimension.flare.push) read app string resources for notification
+    // channels and titles. Test resources include robolectric.properties defaulting the test
+    // application to plain android.app.Application, so tests that do not ask for the real App
+    // never run its Koin/DB startup (see that file for details).
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
+
     // START Non-FOSS component
     if (project.file("google-services.json").exists()) {
         sourceSets.getByName("main").kotlin.directories.add("src/play/java")
@@ -157,6 +167,8 @@ dependencies {
     implementation(libs.richtext.ui.material3)
     implementation(libs.richtext.commonmark)
     implementation(libs.androidx.browser)
+    implementation(libs.unifiedpush.connector)
+    implementation(libs.androidx.work.runtime)
     implementation("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")
 
     // START Non-FOSS component
@@ -173,6 +185,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.ktor.client.mock)
     testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.work.testing)
     testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.espresso.core)

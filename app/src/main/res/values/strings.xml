@@ -921,4 +921,25 @@
     <string name="image_translation_automatic">Automatic</string>
     <string name="image_translation_original_file">Original file</string>
     <string name="image_translation_use_shared_description">Share the service URL, API key and model. The service and model must support image output. Turn off to configure image translation separately.</string>
+    <string name="push_channel_mention">Mentions</string>
+    <string name="push_channel_follow">Follows</string>
+    <string name="push_channel_favourite">Favourites and reactions</string>
+    <string name="push_channel_reblog">Boosts</string>
+    <string name="push_channel_poll">Polls</string>
+    <string name="push_channel_other">Other</string>
+    <string name="push_fetching">Checking for new notifications</string>
+    <string name="push_notif_mention">%1$s mentioned you</string>
+    <string name="push_notif_reply">%1$s replied to you</string>
+    <string name="push_notif_follow">%1$s followed you</string>
+    <string name="push_notif_follow_request">%1$s requested to follow you</string>
+    <string name="push_notif_favourite">%1$s favourited your post</string>
+    <string name="push_notif_reaction">%1$s reacted %2$s to your post</string>
+    <string name="push_notif_reblog">%1$s boosted your post</string>
+    <string name="push_notif_quote">%1$s quoted your post</string>
+    <string name="push_notif_poll">A poll you voted in or created has ended</string>
+    <string name="push_notif_status">%1$s posted</string>
+    <string name="push_notif_update">%1$s edited a post</string>
+    <string name="push_notif_other">New activity from %1$s</string>
+    <string name="push_notif_someone">Someone</string>
+    <string name="push_notif_summary">%1$d new notifications</string>
 </resources>
